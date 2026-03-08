@@ -7,8 +7,8 @@
 # Path to the input data file (relative to project root, or absolute)
 DATA_FILE = 'Data/parametric_study.xlsx'
 
-# Directory where output PNGs and CSV will be saved ('' = project root)
-OUTPUT_DIR = ''
+# Directory where output PNGs and CSV will be saved
+OUTPUT_DIR = 'output'
 
 # Train / test split ratio
 TRAIN_RATIO = 0.80

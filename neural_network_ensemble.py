@@ -32,6 +32,8 @@ except ImportError:
     pass
 
 import os
+if OUTPUT_DIR:
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 _out = lambda fname: os.path.join(OUTPUT_DIR, fname) if OUTPUT_DIR else fname
 
 np.random.seed(RANDOM_SEED)
