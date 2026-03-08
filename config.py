@@ -38,3 +38,6 @@ N_BOOST_STAGES = 5
 # L2 regularisation strengths explored for each model separately.
 # The best alpha is chosen via a held-out validation split within the training set.
 L2_ALPHA_GRID = [0.0001, 0.001, 0.01, 0.1, 1.0]
+
+# Number of folds for stratified k-fold cross-validation.
+K_FOLDS = 5
