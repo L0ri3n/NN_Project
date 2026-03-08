@@ -57,9 +57,19 @@ M = pd.read_excel(DATA_FILE, skiprows=EXCEL_SKIPROWS).values
 X = M[:, :-1]   # all columns except last  (samples × features)
 y = M[:, -1]    # last column              (samples,)
 
+# ── Log10 preprocessing ───────────────────────────────────────────────────────
+# Param 1 (index 0) and the target are right-skewed; log10 compresses the
+# dynamic range and helps the MLP learn a more linear mapping.
+# y_orig retains the untransformed target so that metrics (MSE, R²) are always
+# reported in the original physical units after applying the inverse transform.
+y_orig   = y.copy()
+X[:, 0]  = np.log10(X[:, 0])
+y        = np.log10(y)
+
 Q          = len(y)
 n_features = X.shape[1]
 print(f"Dataset: {Q} samples  |  {n_features} features")
+print("  Preprocessing: log10 applied to Param 1 and Target")
 print(f"Evaluation: {K_FOLDS}-fold stratified cross-validation")
 
 # Bin y into K_FOLDS quantiles for stratified splitting (regression proxy)
@@ -84,9 +94,16 @@ def make_mlp(n_neurons: int, random_state: int = 0, alpha: float = 0.0001) -> ML
 
 
 def make_inv_y(scaler):
-    """Return an inverse-transform callable bound to the given StandardScaler."""
+    """Return an inverse-transform callable: StandardScaler^-1 then 10^x.
+
+    The full forward chain is  y_orig → log10 → StandardScaler → y_s.
+    The inverse chain is therefore  y_s → StandardScaler^-1 → 10^x → y_orig.
+    Predictions returned by this callable are in the original physical units,
+    so MSE and R² computed against y_orig are directly interpretable.
+    """
     def inv(a):
-        return scaler.inverse_transform(a.reshape(-1, 1)).ravel()
+        log_vals = scaler.inverse_transform(a.reshape(-1, 1)).ravel()
+        return 10 ** log_vals
     return inv
 
 
@@ -298,8 +315,9 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
           f"(train={len(train_idx)}  test={len(test_idx)})")
     print(f"{'─' * 60}")
 
-    X_train, X_test = X[train_idx], X[test_idx]
-    y_train, y_test = y[train_idx], y[test_idx]
+    X_train, X_test         = X[train_idx], X[test_idx]
+    y_train, y_test         = y[train_idx], y[test_idx]        # log10-space
+    y_orig_train, y_orig_test = y_orig[train_idx], y_orig[test_idx]  # original units
 
     # Scale — fit on training fold only
     scaler_X  = StandardScaler()
@@ -321,9 +339,9 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
         net = make_mlp(n, random_state=fold_seed)
         net.fit(X_train_s, y_train_s)
         mse_arch_train[n - 1] = mean_squared_error(
-            y_train, inv_y(net.predict(X_train_s)))
+            y_orig_train, inv_y(net.predict(X_train_s)))
         mse_arch_test[n - 1]  = mean_squared_error(
-            y_test,  inv_y(net.predict(X_test_s)))
+            y_orig_test,  inv_y(net.predict(X_test_s)))
 
     best_n = int(np.argmin(mse_arch_test[MIN_NEURONS - 1:])) + MIN_NEURONS
     print(f"    → Best neurons: {best_n}")
@@ -333,11 +351,11 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
 
     # ── Baseline ──────────────────────────────────────────────────────────────
     best_alpha_base = alpha_grid_search(
-        X_train_s, y_train_s, y_train, inv_y, best_n, random_state=fold_seed)
+        X_train_s, y_train_s, y_orig_train, inv_y, best_n, random_state=fold_seed)
     best_net = make_mlp(best_n, random_state=fold_seed, alpha=best_alpha_base)
     best_net.fit(X_train_s, y_train_s)
     base_pred = inv_y(best_net.predict(X_test_s))
-    mse, r, r2 = compute_metrics(y_test, base_pred)
+    mse, r, r2 = compute_metrics(y_orig_test, base_pred)
     fold_metrics['Baseline']['mse'].append(mse)
     fold_metrics['Baseline']['r'].append(r)
     fold_metrics['Baseline']['r2'].append(r2)
@@ -348,15 +366,15 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     # Preserve fold-1 state for downstream analyses
     if fold_idx == 0:
         fold1_data = {
-            'X_train_s': X_train_s, 'X_test_s': X_test_s,
-            'y_train_s': y_train_s, 'y_train':  y_train,
-            'y_test':    y_test,    'inv_y':     inv_y,
-            'best_n':    best_n,    'fold_seed': fold_seed,
+            'X_train_s': X_train_s,    'X_test_s':  X_test_s,
+            'y_train_s': y_train_s,    'y_train':   y_orig_train,  # original units
+            'y_test':    y_orig_test,  'inv_y':     inv_y,         # original units
+            'best_n':    best_n,       'fold_seed': fold_seed,
         }
 
     # ── Bagging — Bootstrap (with replacement) ────────────────────────────────
     best_alpha_bag = alpha_grid_search(
-        X_train_s, y_train_s, y_train, inv_y, best_n, random_state=fold_seed)
+        X_train_s, y_train_s, y_orig_train, inv_y, best_n, random_state=fold_seed)
     bag_preds_test = np.zeros((N_ENSEMBLE, len(y_test)))
     oob_sum_bag    = np.zeros(len(y_train))
     oob_cnt_bag    = np.zeros(len(y_train))
@@ -377,8 +395,8 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     oob_pred_bag  = np.where(valid_oob_bag,
                              oob_sum_bag / np.where(oob_cnt_bag > 0, oob_cnt_bag, 1), 0)
     oob_mse_bag   = mean_squared_error(
-        y_train[valid_oob_bag], inv_y(oob_pred_bag[valid_oob_bag]))
-    mse, r, r2 = compute_metrics(y_test, bag_pred_test)
+        y_orig_train[valid_oob_bag], inv_y(oob_pred_bag[valid_oob_bag]))
+    mse, r, r2 = compute_metrics(y_orig_test, bag_pred_test)
     fold_metrics['Bagging']['mse'].append(mse)
     fold_metrics['Bagging']['r'].append(r)
     fold_metrics['Bagging']['r2'].append(r2)
@@ -388,7 +406,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
 
     # ── Bagging — Subsampling (without replacement, BAG_SUBSAMPLE_FRAC) ───────
     best_alpha_sub = alpha_grid_search(
-        X_train_s, y_train_s, y_train, inv_y, best_n, random_state=fold_seed)
+        X_train_s, y_train_s, y_orig_train, inv_y, best_n, random_state=fold_seed)
     sub_size       = max(1, int(BAG_SUBSAMPLE_FRAC * len(y_train)))
     sub_preds_test = np.zeros((N_ENSEMBLE, len(y_test)))
     oob_sum_sub    = np.zeros(len(y_train))
@@ -410,8 +428,8 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     oob_pred_sub  = np.where(valid_oob_sub,
                              oob_sum_sub / np.where(oob_cnt_sub > 0, oob_cnt_sub, 1), 0)
     oob_mse_sub   = mean_squared_error(
-        y_train[valid_oob_sub], inv_y(oob_pred_sub[valid_oob_sub]))
-    mse, r, r2 = compute_metrics(y_test, sub_pred_test)
+        y_orig_train[valid_oob_sub], inv_y(oob_pred_sub[valid_oob_sub]))
+    mse, r, r2 = compute_metrics(y_orig_test, sub_pred_test)
     fold_metrics['Bagging (Subsamp)']['mse'].append(mse)
     fold_metrics['Bagging (Subsamp)']['r'].append(r)
     fold_metrics['Bagging (Subsamp)']['r2'].append(r2)
@@ -421,7 +439,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
 
     # ── Deep Ensembles ────────────────────────────────────────────────────────
     best_alpha_de = alpha_grid_search(
-        X_train_s, y_train_s, y_train, inv_y, best_n, random_state=fold_seed)
+        X_train_s, y_train_s, y_orig_train, inv_y, best_n, random_state=fold_seed)
     de_preds_test = np.zeros((N_ENSEMBLE, len(y_test)))
     for m in range(N_ENSEMBLE):
         net_d = make_mlp(best_n, random_state=fold_seed * 100 + m,
@@ -431,7 +449,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     de_preds_orig = np.array([inv_y(de_preds_test[m]) for m in range(N_ENSEMBLE)])
     de_pred_test  = de_preds_orig.mean(axis=0)
     de_std_test   = de_preds_orig.std(axis=0)
-    mse, r, r2 = compute_metrics(y_test, de_pred_test)
+    mse, r, r2 = compute_metrics(y_orig_test, de_pred_test)
     fold_metrics['Deep Ensemble']['mse'].append(mse)
     fold_metrics['Deep Ensemble']['r'].append(r)
     fold_metrics['Deep Ensemble']['r2'].append(r2)
@@ -444,7 +462,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
 
     # ── Residual Boosting ─────────────────────────────────────────────────────
     best_alpha_bst = alpha_grid_search(
-        X_train_s, y_train_s, y_train, inv_y, best_n, random_state=fold_seed)
+        X_train_s, y_train_s, y_orig_train, inv_y, best_n, random_state=fold_seed)
     cumulative_train = np.zeros(len(y_train))
     cumulative_test  = np.zeros(len(y_test))
     residual         = y_train_s.copy()
@@ -456,14 +474,14 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
         cumulative_test  += net_r.predict(X_test_s)
         residual          = y_train_s - cumulative_train
     bst_pred_test = inv_y(cumulative_test)
-    mse, r, r2 = compute_metrics(y_test, bst_pred_test)
+    mse, r, r2 = compute_metrics(y_orig_test, bst_pred_test)
     fold_metrics['Residual Boosting']['mse'].append(mse)
     fold_metrics['Residual Boosting']['r'].append(r)
     fold_metrics['Residual Boosting']['r2'].append(r2)
     oof_preds['Residual Boosting'][test_idx] = bst_pred_test
     print(f"  Res. Boosting    MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}")
 
-    oof_true[test_idx] = y_test
+    oof_true[test_idx] = y_orig_test   # original units for OOF scatter plots
 
 
 # =============================================================================
@@ -543,6 +561,19 @@ display_df = pd.DataFrame({
         f"{r['R² mean']:.4f} ± {r['R² std']:.4f}"   for r in summary_rows],
 }, index=[r['Model'] for r in summary_rows])
 print("\n", display_df.to_string())
+
+# ── Fold-to-fold MSE variance report (log10 transform effect) ─────────────────
+print("\n" + "=" * 60)
+print("FOLD-TO-FOLD MSE VARIANCE  (metrics in original units)")
+print("  (log10 preprocessing applied to Param 1 and Target)")
+print("=" * 60)
+print(f"\n  {'Model':<22} {'Fold MSE values':>52}  Variance")
+for name in MODEL_NAMES:
+    mse_vals  = fold_metrics[name]['mse']
+    mse_var   = np.var(mse_vals)
+    vals_str  = "  ".join(f"{v:.6f}" for v in mse_vals)
+    print(f"  {name:<22} {vals_str:>52}  {mse_var:.4e}")
+print()
 
 
 # =============================================================================

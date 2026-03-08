@@ -162,3 +162,73 @@ the data and the remaining 35 % are a true held-out OOB set with no
 replication artefacts. Comparing both strategies under identical CV and
 architecture conditions isolates the effect of the sampling scheme on ensemble
 diversity, generalisation, and OOB error quality.
+
+---
+
+## [4] Log10 Preprocessing for Param 1 and Target Variable
+
+**Date:** 2026-03-08
+**Files changed:** `neural_network_ensemble.py`
+
+### What changed
+
+Added a log10 preprocessing step applied to `Param 1` (feature index 0) and
+the target variable immediately after data loading, before any splitting or
+scaling. All predictions are inverse-transformed (`10^x`) before metrics are
+computed, so MSE and R² remain interpretable in original physical units.
+
+### Implementation details
+
+- **Data loading** — after extracting `X` and `y` from the Excel file:
+  - `y_orig = y.copy()` preserves the raw target for metric computation
+  - `X[:, 0] = np.log10(X[:, 0])` transforms Param 1 in-place
+  - `y = np.log10(y)` transforms the target in-place
+  - Stratified binning (`pd.qcut`) and all CV splitting use the log-space `y`
+    (monotonic transform preserves quantile order)
+- **`make_inv_y(scaler)`** — updated to chain two inverse steps:
+  `log_vals = scaler.inverse_transform(a)` then `return 10 ** log_vals`.
+  The full forward pipeline is `y_orig → log10 → StandardScaler → y_s`;
+  the inverse is `y_s → StandardScaler⁻¹ → 10^x → y_orig`
+- **CV loop** — each fold extracts `y_orig_train, y_orig_test = y_orig[train_idx], y_orig[test_idx]`
+  alongside the log-space `y_train`, `y_test`
+- **Architecture search** — `mean_squared_error` calls replaced to use
+  `y_orig_train` / `y_orig_test` (original units) vs `inv_y(predictions)`
+- **`alpha_grid_search`** — `y_tr` argument changed from log-space `y_train`
+  to `y_orig_train` so alpha ranking is consistent with the final metric space
+- **OOB MSE** (both Bagging variants) — `y_train[valid_oob]` replaced with
+  `y_orig_train[valid_oob]` to match original units
+- **`compute_metrics`** calls — all five model sections now compare against
+  `y_orig_test` instead of log-space `y_test`
+- **`oof_true`** — assigned from `y_orig_test` so OOF scatter plots display
+  original units on both axes
+- **`fold1_data`** — `'y_train'` and `'y_test'` keys store `y_orig_train` /
+  `y_orig_test`, keeping parameter importance metrics in original units
+- **New variance report** — printed after the summary table; shows per-fold
+  MSE values and their variance (`np.var`) for each model
+
+### Results (5-fold CV, original units)
+
+| Model | MSE mean ± std | R² mean ± std | Fold-MSE variance |
+|---|---|---|---|
+| Baseline | 52 581 ± 17 118 | 0.885 ± 0.042 | 2.93e+08 |
+| Bagging (Bootstrap) | 48 670 ± 19 097 | 0.903 ± 0.024 | 3.65e+08 |
+| Bagging (Subsamp) | 49 712 ± 19 001 | 0.899 ± 0.029 | 3.61e+08 |
+| Deep Ensemble | **46 881 ± 14 858** | **0.903 ± 0.024** | **2.21e+08** |
+| Residual Boosting | 52 114 ± 16 787 | 0.887 ± 0.041 | 2.82e+08 |
+
+Deep Ensembles achieves both the lowest mean MSE and the lowest fold-to-fold
+variance. Fold 3 remains the hardest fold for all models (Baseline MSE ~86k
+vs. ~37–47k elsewhere), indicating the high-variance comes from data
+distribution rather than preprocessing. The transform provides the most
+benefit to Deep Ensembles; Bagging variants show higher variance than before,
+likely because the compressed input range makes subsample diversity more
+sensitive to which samples land in each bag.
+
+### Motivation
+
+Both `Param 1` and the target variable are right-skewed. Log10 compression
+reduces the dynamic range, making the relationship between inputs and output
+more linear and easier for the MLP's logistic activations to approximate.
+Because the inverse transform is applied before every metric call, the
+reported MSE and R² figures are directly comparable to values from earlier
+runs (pre-transform) and remain physically meaningful.
