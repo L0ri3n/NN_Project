@@ -18,11 +18,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.neural_network import MLPRegressor
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold
 from sklearn.utils import resample
-from scipy.stats import pearsonr
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from scipy.stats import pearsonr, gaussian_kde, skew
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -131,6 +133,137 @@ def scatter_plot(y_true, y_pred, title):
     ax.set_title(title); ax.legend(); ax.grid(True); ax.set_aspect('equal')
     plt.tight_layout()
     return fig
+
+
+# =============================================================================
+# 1b. INPUT DATA DISTRIBUTION & CLUSTERING ANALYSIS
+# =============================================================================
+
+print("\n" + "=" * 60)
+print("INPUT DATA EXPLORATION")
+print("=" * 60)
+
+# ── Feature & target distributions ───────────────────────────────────────────
+n_cols_d = min(4, n_features + 1)
+n_rows_d = int(np.ceil((n_features + 1) / n_cols_d))
+fig_dist, axes_dist = plt.subplots(n_rows_d, n_cols_d,
+                                   figsize=(n_cols_d * 3.5, n_rows_d * 2.8),
+                                   squeeze=False)
+axes_dist = axes_dist.ravel()
+
+for i in range(n_features):
+    ax = axes_dist[i]
+    vals = X[:, i]
+    ax.hist(vals, bins=15, density=True, alpha=0.5,
+            color='steelblue', edgecolor='white')
+    kde_x = np.linspace(vals.min(), vals.max(), 200)
+    ax.plot(kde_x, gaussian_kde(vals)(kde_x), 'k-', lw=1.5)
+    ax.set_title(f'Param {i + 1}', fontsize=9)
+    ax.set_xlabel('Value', fontsize=7)
+    ax.set_ylabel('Density', fontsize=7)
+    ax.tick_params(labelsize=7)
+    ax.grid(True, alpha=0.3)
+
+ax = axes_dist[n_features]
+ax.hist(y, bins=15, density=True, alpha=0.5, color='tomato', edgecolor='white')
+kde_ty = np.linspace(y.min(), y.max(), 200)
+ax.plot(kde_ty, gaussian_kde(y)(kde_ty), 'k-', lw=1.5)
+ax.set_title('Target', fontsize=9)
+ax.set_xlabel('Value', fontsize=7)
+ax.set_ylabel('Density', fontsize=7)
+ax.tick_params(labelsize=7)
+ax.grid(True, alpha=0.3)
+
+for j in range(n_features + 1, len(axes_dist)):
+    axes_dist[j].set_visible(False)
+
+fig_dist.suptitle('Input Feature & Target Distributions', fontsize=12)
+plt.tight_layout()
+
+# Print basic stats
+print(f"\n  {'':12s}{'Min':>10} {'Max':>10} {'Mean':>10} {'Std':>10} {'Skew':>8}")
+for i in range(n_features):
+    v = X[:, i]
+    print(f"  Param {i + 1:>5d}   {v.min():10.4f} {v.max():10.4f}"
+          f" {v.mean():10.4f} {v.std():10.4f} {skew(v):8.3f}")
+v = y
+print(f"  {'Target':>12s}  {v.min():10.4f} {v.max():10.4f}"
+      f" {v.mean():10.4f} {v.std():10.4f} {skew(v):8.3f}")
+
+# ── Pearson correlation heatmap ───────────────────────────────────────────────
+labels_corr = [f'P{i + 1}' for i in range(n_features)] + ['Target']
+corr_matrix = np.corrcoef(M.T)
+fig_corr, ax = plt.subplots(figsize=(max(5, n_features + 2),
+                                     max(4, n_features + 1)))
+im = ax.imshow(corr_matrix, cmap='RdBu_r', vmin=-1, vmax=1)
+plt.colorbar(im, ax=ax, label='Pearson r')
+ax.set_xticks(range(len(labels_corr)))
+ax.set_yticks(range(len(labels_corr)))
+ax.set_xticklabels(labels_corr, rotation=45, ha='right', fontsize=8)
+ax.set_yticklabels(labels_corr, fontsize=8)
+for row in range(len(labels_corr)):
+    for col in range(len(labels_corr)):
+        val = corr_matrix[row, col]
+        ax.text(col, row, f'{val:.2f}', ha='center', va='center',
+                fontsize=7, color='white' if abs(val) > 0.6 else 'black')
+ax.set_title('Pearson Correlation Heatmap (Features + Target)')
+plt.tight_layout()
+
+# ── K-Means clustering ────────────────────────────────────────────────────────
+print("\n  K-Means clustering (silhouette & elbow):")
+scaler_clust = StandardScaler()
+X_scaled_c   = scaler_clust.fit_transform(X)
+
+max_k      = min(8, Q // 5)
+k_range    = range(2, max_k + 1)
+sil_scores = []
+inertias   = []
+
+for k in k_range:
+    km       = KMeans(n_clusters=k, random_state=RANDOM_SEED, n_init=10)
+    labels_k = km.fit_predict(X_scaled_c)
+    sil_scores.append(silhouette_score(X_scaled_c, labels_k))
+    inertias.append(km.inertia_)
+    print(f"    k={k}  Silhouette={sil_scores[-1]:.4f}  Inertia={inertias[-1]:.2f}")
+
+best_k      = list(k_range)[int(np.argmax(sil_scores))]
+km_best     = KMeans(n_clusters=best_k, random_state=RANDOM_SEED, n_init=10)
+best_labels = km_best.fit_predict(X_scaled_c)
+print(f"\n  Best k (silhouette) = {best_k}")
+
+for c in range(best_k):
+    mask = best_labels == c
+    print(f"    Cluster {c}: {mask.sum():3d} samples  "
+          f"y_mean={y[mask].mean():.4f}  y_std={y[mask].std():.4f}")
+
+# Silhouette + elbow side-by-side
+fig_clust, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+ax1.plot(list(k_range), sil_scores, 'o-', color='steelblue')
+ax1.axvline(best_k, color='red', ls='--', label=f'Best k={best_k}')
+ax1.set_xlabel('k'); ax1.set_ylabel('Silhouette Score')
+ax1.set_title('Silhouette Score vs k'); ax1.legend(); ax1.grid(True)
+
+ax2.plot(list(k_range), inertias, 's-', color='tomato')
+ax2.set_xlabel('k'); ax2.set_ylabel('Inertia (within-cluster SSE)')
+ax2.set_title('Elbow Curve'); ax2.grid(True)
+
+plt.suptitle('K-Means Clustering Analysis', fontsize=12)
+plt.tight_layout()
+
+# PCA 2D projection coloured by cluster label
+pca    = PCA(n_components=2, random_state=RANDOM_SEED)
+X_pca  = pca.fit_transform(X_scaled_c)
+
+fig_pca, ax = plt.subplots(figsize=(6, 5))
+for c in range(best_k):
+    mask = best_labels == c
+    ax.scatter(X_pca[mask, 0], X_pca[mask, 1], label=f'Cluster {c}',
+               alpha=0.75, edgecolors='k', linewidths=0.3, s=55)
+ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} var.)')
+ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} var.)')
+ax.set_title(f'PCA Projection — K-Means (k={best_k})')
+ax.legend(); ax.grid(True, alpha=0.3)
+plt.tight_layout()
 
 
 # =============================================================================
@@ -494,6 +627,10 @@ plt.tight_layout()
 # =============================================================================
 
 figures = {
+    '00_input_distributions':              fig_dist,
+    '00b_correlation_heatmap':             fig_corr,
+    '00c_kmeans_clustering':               fig_clust,
+    '00d_pca_cluster_projection':          fig_pca,
     '01_architecture_search_fold1':        fig_arch,
     '02_parameter_importance':              fig_imp,
     '03_baseline_oof_scatter':              fig_scatters['Baseline'],
