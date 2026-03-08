@@ -1,8 +1,8 @@
 """
 Neural Network Surrogate Model with Ensemble Learning
 ======================================================
-Contaminant Transport in Groundwater Flow - Parametric Study
-Converted from MATLAB and extended with ensemble methods.
+Contaminant Transport in Groundwater Flow.
+Lorién Crespo Gracia
 
 Ensemble methods implemented:
   1. Baseline MLP (single network, architecture search)
@@ -25,13 +25,14 @@ warnings.filterwarnings('ignore')
 # 0. CONFIGURATION
 # =============================================================================
 
-DATA_FILE       = 'parametric_study.xlsx'
-TRAIN_RATIO     = 0.80
-RANDOM_SEED     = 42
-MIN_NEURONS     = 1
-MAX_NEURONS     = 10
-N_ENSEMBLE      = 10    # Number of members for Bagging / Deep Ensembles
-N_BOOST_STAGES  = 5     # Number of boosting stages
+from config import *
+try:
+    from config_local import *  # local overrides — gitignored, never committed
+except ImportError:
+    pass
+
+import os
+_out = lambda fname: os.path.join(OUTPUT_DIR, fname) if OUTPUT_DIR else fname
 
 np.random.seed(RANDOM_SEED)
 
@@ -364,7 +365,7 @@ figures = {
 }
 
 for fname, fig in figures.items():
-    fig.savefig(f'{fname}.png', dpi=150, bbox_inches='tight')
+    fig.savefig(_out(f'{fname}.png'), dpi=150, bbox_inches='tight')
 
 print("\nAll figures saved as PNG files.")
 plt.show()
@@ -373,5 +374,5 @@ plt.show()
 # 9. EXPORT SUMMARY TABLE
 # =============================================================================
 
-summary_df.to_csv('ensemble_summary.csv')
+summary_df.to_csv(_out('ensemble_summary.csv'))
 print("Summary table saved to ensemble_summary.csv")

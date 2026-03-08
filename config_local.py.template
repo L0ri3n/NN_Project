@@ -1,0 +1,16 @@
+# =============================================================================
+# LOCAL CONFIGURATION TEMPLATE
+# Copy this file to config_local.py and adjust to your machine.
+# config_local.py is gitignored — never commit it.
+# Only override the values that differ from config.py defaults.
+# =============================================================================
+
+# Example: point to an absolute path on your machine
+# DATA_FILE = 'C:/Users/yourname/path/to/parametric_study.xlsx'
+
+# Example: save outputs to a specific folder
+# OUTPUT_DIR = 'C:/Users/yourname/results/'
+
+# Example: change random seed or ensemble size
+# RANDOM_SEED = 0
+# N_ENSEMBLE  = 5

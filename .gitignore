@@ -1,0 +1,18 @@
+# Personal local config — never commit this
+config_local.py
+
+# Data files (may be large or sensitive)
+Data/
+*.xlsx
+*.csv
+
+# Script outputs
+*.png
+*.pdf
+results/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
