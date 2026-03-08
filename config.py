@@ -31,6 +31,11 @@ MAX_NEURONS = 30
 # Higher values reduce variance but increase training time linearly.
 N_ENSEMBLE = 5
 
+# Fraction of training samples drawn (without replacement) per member in
+# Subsampling Bagging. The remaining (1 - BAG_SUBSAMPLE_FRAC) fraction
+# serves as the out-of-bag (OOB) set for that member.
+BAG_SUBSAMPLE_FRAC = 0.65
+
 # Number of sequential stages in Residual Boosting.
 # Each stage fits a new network on the residuals left by the previous stages.
 N_BOOST_STAGES = 5

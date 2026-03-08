@@ -6,7 +6,8 @@ Lorién Crespo Gracia
 
 Ensemble methods implemented:
   1. Baseline MLP (single network, architecture search)
-  2. Bagging (with out-of-bag error estimation)
+  2. Bagging — Bootstrap (with replacement, OOB error estimation)
+  2b. Bagging — Subsampling (65 % without replacement, OOB error estimation)
   3. Deep Ensembles (independently trained networks)
   4. Residual Boosting (sequential residual learners)
 
@@ -142,8 +143,9 @@ print("=" * 60)
 
 skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=RANDOM_SEED)
 
-MODEL_NAMES = ['Baseline', 'Bagging', 'Deep Ensemble', 'Residual Boosting']
-COLORS      = ['#4c72b0', '#dd8452', '#55a868', '#c44e52']
+MODEL_NAMES = ['Baseline', 'Bagging', 'Bagging (Subsamp)',
+               'Deep Ensemble', 'Residual Boosting']
+COLORS      = ['#4c72b0', '#dd8452', '#8172b2', '#55a868', '#c44e52']
 
 # Per-fold metric storage
 fold_metrics = {name: {'mse': [], 'r': [], 'r2': []} for name in MODEL_NAMES}
@@ -219,24 +221,70 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
             'best_n':    best_n,    'fold_seed': fold_seed,
         }
 
-    # ── Bagging ───────────────────────────────────────────────────────────────
+    # ── Bagging — Bootstrap (with replacement) ────────────────────────────────
     best_alpha_bag = alpha_grid_search(
         X_train_s, y_train_s, y_train, inv_y, best_n, random_state=fold_seed)
     bag_preds_test = np.zeros((N_ENSEMBLE, len(y_test)))
+    oob_sum_bag    = np.zeros(len(y_train))
+    oob_cnt_bag    = np.zeros(len(y_train))
     for m in range(N_ENSEMBLE):
         boot_idx = resample(np.arange(len(y_train)), replace=True,
                             random_state=fold_seed + m)
+        oob_mask = np.ones(len(y_train), dtype=bool)
+        oob_mask[np.unique(boot_idx)] = False
         net_b = make_mlp(best_n, random_state=fold_seed + m,
                          alpha=best_alpha_bag)
         net_b.fit(X_train_s[boot_idx], y_train_s[boot_idx])
+        if oob_mask.any():
+            oob_sum_bag[oob_mask] += net_b.predict(X_train_s[oob_mask])
+            oob_cnt_bag[oob_mask] += 1
         bag_preds_test[m] = net_b.predict(X_test_s)
     bag_pred_test = inv_y(bag_preds_test.mean(axis=0))
+    valid_oob_bag = oob_cnt_bag > 0
+    oob_pred_bag  = np.where(valid_oob_bag,
+                             oob_sum_bag / np.where(oob_cnt_bag > 0, oob_cnt_bag, 1), 0)
+    oob_mse_bag   = mean_squared_error(
+        y_train[valid_oob_bag], inv_y(oob_pred_bag[valid_oob_bag]))
     mse, r, r2 = compute_metrics(y_test, bag_pred_test)
     fold_metrics['Bagging']['mse'].append(mse)
     fold_metrics['Bagging']['r'].append(r)
     fold_metrics['Bagging']['r2'].append(r2)
     oof_preds['Bagging'][test_idx] = bag_pred_test
-    print(f"  Bagging          MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}")
+    print(f"  Bagging (Boot)   MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}"
+          f"  OOB-MSE={oob_mse_bag:.6f}  OOB-cov={valid_oob_bag.mean():.0%}")
+
+    # ── Bagging — Subsampling (without replacement, BAG_SUBSAMPLE_FRAC) ───────
+    best_alpha_sub = alpha_grid_search(
+        X_train_s, y_train_s, y_train, inv_y, best_n, random_state=fold_seed)
+    sub_size       = max(1, int(BAG_SUBSAMPLE_FRAC * len(y_train)))
+    sub_preds_test = np.zeros((N_ENSEMBLE, len(y_test)))
+    oob_sum_sub    = np.zeros(len(y_train))
+    oob_cnt_sub    = np.zeros(len(y_train))
+    for m in range(N_ENSEMBLE):
+        rng_sub  = np.random.RandomState(fold_seed + m)
+        sub_idx  = rng_sub.choice(len(y_train), size=sub_size, replace=False)
+        oob_mask = np.ones(len(y_train), dtype=bool)
+        oob_mask[sub_idx] = False
+        net_s = make_mlp(best_n, random_state=fold_seed + m,
+                         alpha=best_alpha_sub)
+        net_s.fit(X_train_s[sub_idx], y_train_s[sub_idx])
+        if oob_mask.any():
+            oob_sum_sub[oob_mask] += net_s.predict(X_train_s[oob_mask])
+            oob_cnt_sub[oob_mask] += 1
+        sub_preds_test[m] = net_s.predict(X_test_s)
+    sub_pred_test = inv_y(sub_preds_test.mean(axis=0))
+    valid_oob_sub = oob_cnt_sub > 0
+    oob_pred_sub  = np.where(valid_oob_sub,
+                             oob_sum_sub / np.where(oob_cnt_sub > 0, oob_cnt_sub, 1), 0)
+    oob_mse_sub   = mean_squared_error(
+        y_train[valid_oob_sub], inv_y(oob_pred_sub[valid_oob_sub]))
+    mse, r, r2 = compute_metrics(y_test, sub_pred_test)
+    fold_metrics['Bagging (Subsamp)']['mse'].append(mse)
+    fold_metrics['Bagging (Subsamp)']['r'].append(r)
+    fold_metrics['Bagging (Subsamp)']['r2'].append(r2)
+    oof_preds['Bagging (Subsamp)'][test_idx] = sub_pred_test
+    print(f"  Bag. (Subsamp)   MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}"
+          f"  OOB-MSE={oob_mse_sub:.6f}  OOB-cov={valid_oob_sub.mean():.0%}")
 
     # ── Deep Ensembles ────────────────────────────────────────────────────────
     best_alpha_de = alpha_grid_search(
@@ -446,15 +494,16 @@ plt.tight_layout()
 # =============================================================================
 
 figures = {
-    '01_architecture_search_fold1':   fig_arch,
-    '02_parameter_importance':         fig_imp,
-    '03_baseline_oof_scatter':         fig_scatters['Baseline'],
-    '04_bagging_oof_scatter':          fig_scatters['Bagging'],
-    '05_deep_ensemble_oof_scatter':    fig_scatters['Deep Ensemble'],
-    '06_boosting_oof_scatter':         fig_scatters['Residual Boosting'],
-    '07_deep_ensemble_uncertainty':    fig_unc,
-    '08_cv_mse_boxplot':               fig_box,
-    '09_summary_comparison':           fig_sum,
+    '01_architecture_search_fold1':        fig_arch,
+    '02_parameter_importance':              fig_imp,
+    '03_baseline_oof_scatter':              fig_scatters['Baseline'],
+    '04_bagging_boot_oof_scatter':          fig_scatters['Bagging'],
+    '04b_bagging_subsamp_oof_scatter':      fig_scatters['Bagging (Subsamp)'],
+    '05_deep_ensemble_oof_scatter':         fig_scatters['Deep Ensemble'],
+    '06_boosting_oof_scatter':              fig_scatters['Residual Boosting'],
+    '07_deep_ensemble_uncertainty':         fig_unc,
+    '08_cv_mse_boxplot':                    fig_box,
+    '09_summary_comparison':                fig_sum,
 }
 
 for fname, fig in figures.items():
