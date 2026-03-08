@@ -77,7 +77,7 @@ inv_y = lambda a: scaler_y.inverse_transform(a.reshape(-1, 1)).ravel()
 # HELPERS
 # =============================================================================
 
-def make_mlp(n_neurons: int, random_state: int = 0) -> MLPRegressor:
+def make_mlp(n_neurons: int, random_state: int = 0, alpha: float = 0.0001) -> MLPRegressor:
     """Return a configured single-hidden-layer MLP matching the MATLAB baseline."""
     return MLPRegressor(
         hidden_layer_sizes=(n_neurons,),
@@ -86,7 +86,32 @@ def make_mlp(n_neurons: int, random_state: int = 0) -> MLPRegressor:
         max_iter=2000,
         random_state=random_state,
         early_stopping=False,
+        alpha=alpha,                    # L2 regularisation strength
     )
+
+
+def alpha_grid_search(n_neurons: int, random_state: int = 0, val_frac: float = 0.2) -> float:
+    """Select best L2 alpha via a held-out validation split within the training set.
+
+    Trains a single MLP for each candidate in L2_ALPHA_GRID on the inner-train
+    portion and evaluates on the inner-val portion. Returns the alpha with the
+    lowest validation MSE.
+    """
+    n_val  = max(1, int(len(y_train) * val_frac))
+    rng    = np.random.RandomState(random_state)
+    perm   = rng.permutation(len(y_train))
+    val_idx, trn_idx = perm[:n_val], perm[n_val:]
+
+    best_alpha, best_mse = L2_ALPHA_GRID[0], np.inf
+    for a in L2_ALPHA_GRID:
+        net = make_mlp(n_neurons, random_state=random_state, alpha=a)
+        net.fit(X_train_s[trn_idx], y_train_s[trn_idx])
+        mse = mean_squared_error(y_train[val_idx],
+                                 inv_y(net.predict(X_train_s[val_idx])))
+        if mse < best_mse:
+            best_mse  = mse
+            best_alpha = a
+    return best_alpha
 
 
 def metrics(y_true, y_pred, label=''):
@@ -111,7 +136,7 @@ def scatter_plot(y_true, y_pred, title):
 
 
 # =============================================================================
-# 2. BASELINE: ARCHITECTURE SEARCH  (mirrors MATLAB loop)
+# 2. BASELINE: ARCHITECTURE SEARCH
 # =============================================================================
 
 print("\n" + "=" * 60)
@@ -132,8 +157,13 @@ for n in range(MIN_NEURONS, MAX_NEURONS + 1):
           f"TestMSE={mse_test_base[n-1]:.6f}")
 
 best_n   = int(np.argmin(mse_test_base)) + MIN_NEURONS
-best_net = trained_nets[best_n]
 print(f"\nBest network: {best_n} hidden neuron(s)")
+
+# L2 regularisation grid search for the baseline model
+best_alpha_base = alpha_grid_search(best_n, random_state=RANDOM_SEED)
+print(f"  Alpha grid search → best alpha = {best_alpha_base}")
+best_net = make_mlp(best_n, random_state=RANDOM_SEED, alpha=best_alpha_base)
+best_net.fit(X_train_s, y_train_s)
 metrics(y_train, inv_y(best_net.predict(X_train_s)), 'Baseline Train')
 metrics(y_test,  inv_y(best_net.predict(X_test_s)),  'Baseline Test')
 
@@ -152,7 +182,7 @@ fig_te = scatter_plot(y_test,  inv_y(best_net.predict(X_test_s)),  'Baseline —
 
 
 # =============================================================================
-# 3. PARAMETER IMPORTANCE (leave-one-out, mirrors MATLAB section)
+# 3. PARAMETER IMPORTANCE (leave-one-out)
 # =============================================================================
 
 print("\n" + "=" * 60)
@@ -187,12 +217,15 @@ plt.tight_layout()
 
 
 # =============================================================================
-# 4. ENSEMBLE — BAGGING  (with Out-of-Bag error estimation)
+# 4. ENSEMBLE — BAGGING
 # =============================================================================
 
 print("\n" + "=" * 60)
 print(f"ENSEMBLE 1 — Bagging  ({N_ENSEMBLE} members, best_n={best_n} neurons)")
 print("=" * 60)
+
+best_alpha_bag = alpha_grid_search(best_n, random_state=RANDOM_SEED)
+print(f"  Alpha grid search → best alpha = {best_alpha_bag}")
 
 bag_preds_train = np.zeros((N_ENSEMBLE, len(y_train)))
 bag_preds_test  = np.zeros((N_ENSEMBLE, len(y_test)))
@@ -206,7 +239,7 @@ for m in range(N_ENSEMBLE):
     boot_idx = resample(np.arange(len(y_train)), replace=True, random_state=RANDOM_SEED + m)
     oob_idx  = np.setdiff1d(np.arange(len(y_train)), boot_idx)
 
-    net_b = make_mlp(best_n, random_state=RANDOM_SEED + m)
+    net_b = make_mlp(best_n, random_state=RANDOM_SEED + m, alpha=best_alpha_bag)
     net_b.fit(X_train_s[boot_idx], y_train_s[boot_idx])
 
     bag_preds_train[m] = net_b.predict(X_train_s)
@@ -240,18 +273,21 @@ fig_bag_te = scatter_plot(y_test,  bag_pred_test,  'Bagging — Testing')
 
 
 # =============================================================================
-# 5. ENSEMBLE — DEEP ENSEMBLES  (independent random initialisations)
+# 5. ENSEMBLE — DEEP ENSEMBLES
 # =============================================================================
 
 print("\n" + "=" * 60)
 print(f"ENSEMBLE 2 — Deep Ensembles  ({N_ENSEMBLE} members, best_n={best_n} neurons)")
 print("=" * 60)
 
+best_alpha_de = alpha_grid_search(best_n, random_state=RANDOM_SEED)
+print(f"  Alpha grid search → best alpha = {best_alpha_de}")
+
 de_preds_train = np.zeros((N_ENSEMBLE, len(y_train)))
 de_preds_test  = np.zeros((N_ENSEMBLE, len(y_test)))
 
 for m in range(N_ENSEMBLE):
-    net_d = make_mlp(best_n, random_state=RANDOM_SEED * 100 + m)   # different seeds
+    net_d = make_mlp(best_n, random_state=RANDOM_SEED * 100 + m, alpha=best_alpha_de)
     net_d.fit(X_train_s, y_train_s)
     de_preds_train[m] = net_d.predict(X_train_s)
     de_preds_test[m]  = net_d.predict(X_test_s)
@@ -296,13 +332,16 @@ print("\n" + "=" * 60)
 print(f"ENSEMBLE 3 — Residual Boosting  ({N_BOOST_STAGES} stages, best_n={best_n} neurons)")
 print("=" * 60)
 
+best_alpha_bst = alpha_grid_search(best_n, random_state=RANDOM_SEED)
+print(f"  Alpha grid search → best alpha = {best_alpha_bst}")
+
 boost_nets       = []
 cumulative_train = np.zeros(len(y_train))   # accumulated in scaled space
 cumulative_test  = np.zeros(len(y_test))
 residual         = y_train_s.copy()         # boosting residuals in scaled space
 
 for stage in range(N_BOOST_STAGES):
-    net_r = make_mlp(best_n, random_state=RANDOM_SEED + stage * 37)
+    net_r = make_mlp(best_n, random_state=RANDOM_SEED + stage * 37, alpha=best_alpha_bst)
     net_r.fit(X_train_s, residual)
     boost_nets.append(net_r)
 
@@ -349,12 +388,20 @@ results_train = {
     'Residual Boosting': cumulative_train,
 }
 
+best_alphas = {
+    'Baseline':          best_alpha_base,
+    'Bagging':           best_alpha_bag,
+    'Deep Ensemble':     best_alpha_de,
+    'Residual Boosting': best_alpha_bst,
+}
+
 summary_rows = []
 for name in results_test:
     mse_te, r, r2 = metrics(y_test,  results_test[name],  name)
     mse_tr, _, _  = metrics(y_train, results_train[name])
     summary_rows.append({
         'Model':           name,
+        'Best Alpha':      best_alphas[name],
         'Train MSE':       mse_tr,
         'Test MSE':        mse_te,
         'Overfit ratio':   mse_te / mse_tr if mse_tr > 0 else float('nan'),

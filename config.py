@@ -34,3 +34,7 @@ N_ENSEMBLE = 5
 # Number of sequential stages in Residual Boosting.
 # Each stage fits a new network on the residuals left by the previous stages.
 N_BOOST_STAGES = 5
+
+# L2 regularisation strengths explored for each model separately.
+# The best alpha is chosen via a held-out validation split within the training set.
+L2_ALPHA_GRID = [0.0001, 0.001, 0.01, 0.1, 1.0]
