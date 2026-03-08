@@ -336,31 +336,45 @@ print("\n" + "=" * 60)
 print("SUMMARY — Test-Set Comparison")
 print("=" * 60)
 
-results = {
+results_test  = {
     'Baseline':          inv_y(best_net.predict(X_test_s)),
     'Bagging':           bag_pred_test,
     'Deep Ensemble':     de_pred_test,
     'Residual Boosting': cumulative_test,
 }
+results_train = {
+    'Baseline':          inv_y(best_net.predict(X_train_s)),
+    'Bagging':           bag_pred_train,
+    'Deep Ensemble':     de_pred_train,
+    'Residual Boosting': cumulative_train,
+}
 
 summary_rows = []
-for name, pred in results.items():
-    mse, r, r2 = metrics(y_test, pred, name)
-    summary_rows.append({'Model': name, 'MSE': mse, 'R': r, 'R²': r2})
+for name in results_test:
+    mse_te, r, r2 = metrics(y_test,  results_test[name],  name)
+    mse_tr, _, _  = metrics(y_train, results_train[name])
+    summary_rows.append({
+        'Model':           name,
+        'Train MSE':       mse_tr,
+        'Test MSE':        mse_te,
+        'Overfit ratio':   mse_te / mse_tr if mse_tr > 0 else float('nan'),
+        'R':               r,
+        'R²':              r2,
+    })
 
 summary_df = pd.DataFrame(summary_rows).set_index('Model')
 print("\n", summary_df.to_string())
 
 # Bar chart comparison
-fig_sum, axes = plt.subplots(1, 3, figsize=(12, 4))
-for ax, col in zip(axes, ['MSE', 'R', 'R²']):
+fig_sum, axes = plt.subplots(1, 4, figsize=(16, 4))
+for ax, col in zip(axes, ['Test MSE', 'Overfit ratio', 'R', 'R²']):
     vals = summary_df[col].values
     colors = ['#4c72b0', '#dd8452', '#55a868', '#c44e52']
     ax.bar(summary_df.index, vals, color=colors)
     ax.set_title(col); ax.set_xticklabels(summary_df.index, rotation=30, ha='right')
     ax.grid(True, axis='y')
     # Highlight best bar
-    best_i = (np.argmin(vals) if col == 'MSE' else np.argmax(vals))
+    best_i = (np.argmin(vals) if col in ('Test MSE', 'Overfit ratio') else np.argmax(vals))
     ax.bar(summary_df.index[best_i], vals[best_i], color='gold', edgecolor='black', lw=1.5)
 plt.suptitle('Ensemble Comparison — Test Set', fontsize=13)
 plt.tight_layout()
