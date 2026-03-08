@@ -16,6 +16,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import StandardScaler
 from sklearn.utils import resample
 from scipy.stats import pearsonr
 import warnings
@@ -45,7 +46,7 @@ np.random.seed(RANDOM_SEED)
 
 print("=" * 60)
 print("Loading data...")
-M = pd.read_excel(DATA_FILE).values
+M = pd.read_excel(DATA_FILE, skiprows=EXCEL_SKIPROWS).values
 
 X = M[:, :-1]   # all columns except last  (samples × features)
 y = M[:, -1]    # last column              (samples,)
@@ -60,6 +61,16 @@ X_test,  y_test  = X[idx[Q1:]], y[idx[Q1:]]
 n_features = X_train.shape[1]
 print(f"Dataset: {Q} samples  |  {n_features} features")
 print(f"Train: {Q1}  |  Test: {Q - Q1}")
+
+# Fit scalers on training data only, then apply to both sets
+scaler_X = StandardScaler()
+scaler_y = StandardScaler()
+X_train_s = scaler_X.fit_transform(X_train)
+X_test_s  = scaler_X.transform(X_test)
+y_train_s = scaler_y.fit_transform(y_train.reshape(-1, 1)).ravel()
+
+# Helper: inverse-transform scaled predictions back to original units
+inv_y = lambda a: scaler_y.inverse_transform(a.reshape(-1, 1)).ravel()
 
 
 # =============================================================================
@@ -113,9 +124,9 @@ trained_nets   = {}
 
 for n in range(MIN_NEURONS, MAX_NEURONS + 1):
     net = make_mlp(n, random_state=RANDOM_SEED)
-    net.fit(X_train, y_train)
-    mse_train_base[n - 1] = mean_squared_error(y_train, net.predict(X_train))
-    mse_test_base[n - 1]  = mean_squared_error(y_test,  net.predict(X_test))
+    net.fit(X_train_s, y_train_s)
+    mse_train_base[n - 1] = mean_squared_error(y_train, inv_y(net.predict(X_train_s)))
+    mse_test_base[n - 1]  = mean_squared_error(y_test,  inv_y(net.predict(X_test_s)))
     trained_nets[n] = net
     print(f"  Neurons={n:2d}  TrainMSE={mse_train_base[n-1]:.6f}  "
           f"TestMSE={mse_test_base[n-1]:.6f}")
@@ -123,8 +134,8 @@ for n in range(MIN_NEURONS, MAX_NEURONS + 1):
 best_n   = int(np.argmin(mse_test_base)) + MIN_NEURONS
 best_net = trained_nets[best_n]
 print(f"\nBest network: {best_n} hidden neuron(s)")
-metrics(y_train, best_net.predict(X_train), 'Baseline Train')
-metrics(y_test,  best_net.predict(X_test),  'Baseline Test')
+metrics(y_train, inv_y(best_net.predict(X_train_s)), 'Baseline Train')
+metrics(y_test,  inv_y(best_net.predict(X_test_s)),  'Baseline Test')
 
 # Architecture-search plot
 fig_arch, ax = plt.subplots(figsize=(7, 4))
@@ -136,8 +147,8 @@ ax.set_title('ANN Performance vs. Number of Neurons')
 ax.legend(); ax.grid(True); plt.tight_layout()
 
 # Scatter plots — baseline
-fig_tr = scatter_plot(y_train, best_net.predict(X_train), 'Baseline — Training')
-fig_te = scatter_plot(y_test,  best_net.predict(X_test),  'Baseline — Testing')
+fig_tr = scatter_plot(y_train, inv_y(best_net.predict(X_train_s)), 'Baseline — Training')
+fig_te = scatter_plot(y_test,  inv_y(best_net.predict(X_test_s)),  'Baseline — Testing')
 
 
 # =============================================================================
@@ -152,9 +163,9 @@ impact = np.zeros(n_features)
 for p in range(n_features):
     cols = [c for c in range(n_features) if c != p]
     net_excl = make_mlp(best_n, random_state=RANDOM_SEED)
-    net_excl.fit(X_train[:, cols], y_train)
-    mse_tr = mean_squared_error(y_train, net_excl.predict(X_train[:, cols]))
-    mse_te = mean_squared_error(y_test,  net_excl.predict(X_test[:, cols]))
+    net_excl.fit(X_train_s[:, cols], y_train_s)
+    mse_tr = mean_squared_error(y_train, inv_y(net_excl.predict(X_train_s[:, cols])))
+    mse_te = mean_squared_error(y_test,  inv_y(net_excl.predict(X_test_s[:, cols])))
     impact[p] = (mse_tr + mse_te) / 2
     print(f"  Excl. Param {p + 1:2d}  TrainMSE={mse_tr:.6f}  TestMSE={mse_te:.6f}")
 
@@ -196,31 +207,32 @@ for m in range(N_ENSEMBLE):
     oob_idx  = np.setdiff1d(np.arange(len(y_train)), boot_idx)
 
     net_b = make_mlp(best_n, random_state=RANDOM_SEED + m)
-    net_b.fit(X_train[boot_idx], y_train[boot_idx])
+    net_b.fit(X_train_s[boot_idx], y_train_s[boot_idx])
 
-    bag_preds_train[m] = net_b.predict(X_train)
-    bag_preds_test[m]  = net_b.predict(X_test)
+    bag_preds_train[m] = net_b.predict(X_train_s)
+    bag_preds_test[m]  = net_b.predict(X_test_s)
 
-    # OOB contribution
+    # OOB contribution (accumulated in scaled space)
     if len(oob_idx) > 0:
-        oob_accumulator[oob_idx] += net_b.predict(X_train[oob_idx])
+        oob_accumulator[oob_idx] += net_b.predict(X_train_s[oob_idx])
         oob_count[oob_idx]       += 1
 
-    mse_te = mean_squared_error(y_test, net_b.predict(X_test))
+    mse_te = mean_squared_error(y_test, inv_y(net_b.predict(X_test_s)))
     print(f"  Member {m + 1:2d}  TestMSE={mse_te:.6f}")
 
-# Aggregate predictions
-bag_pred_train = bag_preds_train.mean(axis=0)
-bag_pred_test  = bag_preds_test.mean(axis=0)
+# Aggregate predictions (inverse-transform from scaled space)
+bag_pred_train = inv_y(bag_preds_train.mean(axis=0))
+bag_pred_test  = inv_y(bag_preds_test.mean(axis=0))
 
 print("\nBagging ensemble aggregate:")
 metrics(y_train, bag_pred_train, 'Bagging Train')
 metrics(y_test,  bag_pred_test,  'Bagging Test')
 
-# OOB estimate
-valid_oob = oob_count > 0
-oob_pred  = np.where(valid_oob, oob_accumulator / np.maximum(oob_count, 1), np.nan)
-oob_mse   = mean_squared_error(y_train[valid_oob], oob_pred[valid_oob])
+# OOB estimate (average in scaled space, then inverse-transform)
+valid_oob    = oob_count > 0
+oob_pred_s   = np.where(valid_oob, oob_accumulator / np.maximum(oob_count, 1), 0.0)
+oob_pred     = inv_y(oob_pred_s)
+oob_mse      = mean_squared_error(y_train[valid_oob], oob_pred[valid_oob])
 print(f"  {'OOB Error Estimate':30s}  MSE={oob_mse:.6f}")
 
 fig_bag_tr = scatter_plot(y_train, bag_pred_train, 'Bagging — Training')
@@ -240,16 +252,19 @@ de_preds_test  = np.zeros((N_ENSEMBLE, len(y_test)))
 
 for m in range(N_ENSEMBLE):
     net_d = make_mlp(best_n, random_state=RANDOM_SEED * 100 + m)   # different seeds
-    net_d.fit(X_train, y_train)
-    de_preds_train[m] = net_d.predict(X_train)
-    de_preds_test[m]  = net_d.predict(X_test)
-    mse_te = mean_squared_error(y_test, net_d.predict(X_test))
+    net_d.fit(X_train_s, y_train_s)
+    de_preds_train[m] = net_d.predict(X_train_s)
+    de_preds_test[m]  = net_d.predict(X_test_s)
+    mse_te = mean_squared_error(y_test, inv_y(net_d.predict(X_test_s)))
     print(f"  Member {m + 1:2d}  TestMSE={mse_te:.6f}")
 
-de_pred_train = de_preds_train.mean(axis=0)
-de_pred_test  = de_preds_test.mean(axis=0)
-# Predictive uncertainty from standard deviation across members
-de_std_test   = de_preds_test.std(axis=0)
+# Inverse-transform each member's predictions, then aggregate
+de_preds_train = np.array([inv_y(de_preds_train[m]) for m in range(N_ENSEMBLE)])
+de_preds_test  = np.array([inv_y(de_preds_test[m])  for m in range(N_ENSEMBLE)])
+de_pred_train  = de_preds_train.mean(axis=0)
+de_pred_test   = de_preds_test.mean(axis=0)
+# Predictive uncertainty in original units
+de_std_test    = de_preds_test.std(axis=0)
 
 print("\nDeep Ensembles aggregate:")
 metrics(y_train, de_pred_train, 'Deep Ensemble Train')
@@ -281,25 +296,29 @@ print("\n" + "=" * 60)
 print(f"ENSEMBLE 3 — Residual Boosting  ({N_BOOST_STAGES} stages, best_n={best_n} neurons)")
 print("=" * 60)
 
-boost_nets      = []
-cumulative_train = np.zeros(len(y_train))
+boost_nets       = []
+cumulative_train = np.zeros(len(y_train))   # accumulated in scaled space
 cumulative_test  = np.zeros(len(y_test))
-residual         = y_train.copy()
+residual         = y_train_s.copy()         # boosting residuals in scaled space
 
 for stage in range(N_BOOST_STAGES):
     net_r = make_mlp(best_n, random_state=RANDOM_SEED + stage * 37)
-    net_r.fit(X_train, residual)
+    net_r.fit(X_train_s, residual)
     boost_nets.append(net_r)
 
-    pred_tr   = net_r.predict(X_train)
-    pred_te   = net_r.predict(X_test)
+    pred_tr   = net_r.predict(X_train_s)
+    pred_te   = net_r.predict(X_test_s)
     cumulative_train += pred_tr
     cumulative_test  += pred_te
-    residual          = y_train - cumulative_train   # update residual
+    residual          = y_train_s - cumulative_train   # update residual in scaled space
 
-    mse_tr = mean_squared_error(y_train, cumulative_train)
-    mse_te = mean_squared_error(y_test,  cumulative_test)
+    mse_tr = mean_squared_error(y_train, inv_y(cumulative_train))
+    mse_te = mean_squared_error(y_test,  inv_y(cumulative_test))
     print(f"  Stage {stage + 1:2d}  TrainMSE={mse_tr:.6f}  TestMSE={mse_te:.6f}")
+
+# Inverse-transform final cumulative predictions
+cumulative_train = inv_y(cumulative_train)
+cumulative_test  = inv_y(cumulative_test)
 
 print("\nResidual Boosting final:")
 metrics(y_train, cumulative_train, 'Boosting Train')
@@ -318,9 +337,9 @@ print("SUMMARY — Test-Set Comparison")
 print("=" * 60)
 
 results = {
-    'Baseline':         best_net.predict(X_test),
-    'Bagging':          bag_pred_test,
-    'Deep Ensemble':    de_pred_test,
+    'Baseline':          inv_y(best_net.predict(X_test_s)),
+    'Bagging':           bag_pred_test,
+    'Deep Ensemble':     de_pred_test,
     'Residual Boosting': cumulative_test,
 }
 

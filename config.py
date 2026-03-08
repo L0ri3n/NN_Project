@@ -7,6 +7,10 @@
 # Path to the input data file (relative to project root, or absolute).
 DATA_FILE = 'Data/parametric_study.xlsx'
 
+# Rows to skip at the top of the Excel file before the header row.
+# Increase this if the file has a title, caption, or blank rows above the data.
+EXCEL_SKIPROWS = 4
+
 # Directory where output PNGs and the summary CSV will be saved.
 OUTPUT_DIR = 'output'
 
@@ -21,11 +25,11 @@ RANDOM_SEED = 42
 # The script trains one network per integer in [MIN_NEURONS, MAX_NEURONS] and
 # selects the size with the lowest test MSE.
 MIN_NEURONS = 1
-MAX_NEURONS = 10
+MAX_NEURONS = 30
 
 # Number of ensemble members used by Bagging and Deep Ensembles.
 # Higher values reduce variance but increase training time linearly.
-N_ENSEMBLE = 10
+N_ENSEMBLE = 5
 
 # Number of sequential stages in Residual Boosting.
 # Each stage fits a new network on the residuals left by the previous stages.
