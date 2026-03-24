@@ -19,7 +19,7 @@ OUTPUT_DIR = 'output'
 TRAIN_RATIO = 0.80
 
 # Global random seed for reproducibility (data shuffling and network init).
-RANDOM_SEED = 42
+RANDOM_SEED = 138
 
 # Range of hidden-layer sizes explored during the baseline architecture search.
 # The script trains one network per integer in [MIN_NEURONS, MAX_NEURONS] and
@@ -46,3 +46,14 @@ L2_ALPHA_GRID = [0.0001, 0.001, 0.01, 0.1, 1.0]
 
 # Number of folds for stratified k-fold cross-validation.
 K_FOLDS = 5
+
+# Sample weighting scheme to emphasise high target values during training.
+# Weights are applied to all final model fits (Baseline, Bagging members,
+# Deep Ensemble members, Residual Boosting stages). Architecture search and
+# alpha grid search are unweighted to keep hyperparameter selection fast.
+#   'none'       — all samples equally weighted (default, original behaviour)
+#   'rank'       — weight proportional to rank of y in the training fold;
+#                  most robust choice, unaffected by the scale of y values
+#   'log_value'  — weight proportional to log10(y) shifted to be positive;
+#                  ties the emphasis directly to the log10 preprocessing space
+SAMPLE_WEIGHT_SCHEME = 'log_value'

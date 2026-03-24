@@ -11,6 +11,9 @@ Data/
 *.pdf
 results/
 
+# LaTeX document (managed separately)
+Latex_document/
+
 # Python artifacts
 __pycache__/
 *.pyc

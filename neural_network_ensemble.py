@@ -24,7 +24,7 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.utils import resample
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from scipy.stats import pearsonr, gaussian_kde, skew
+from scipy.stats import pearsonr, gaussian_kde, skew, gumbel_r, lognorm, kstest, probplot
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -62,14 +62,15 @@ y = M[:, -1]    # last column              (samples,)
 # dynamic range and helps the MLP learn a more linear mapping.
 # y_orig retains the untransformed target so that metrics (MSE, R²) are always
 # reported in the original physical units after applying the inverse transform.
-y_orig   = y.copy()
-X[:, 0]  = np.log10(X[:, 0])
-y        = np.log10(y)
+y_orig  = y.copy()
+X[:, 0] = np.log10(X[:, 0])
+y       = np.log10(y)
 
 Q          = len(y)
 n_features = X.shape[1]
 print(f"Dataset: {Q} samples  |  {n_features} features")
 print("  Preprocessing: log10 applied to Param 1 and Target")
+print(f"  Sample weighting: {SAMPLE_WEIGHT_SCHEME}")
 print(f"Evaluation: {K_FOLDS}-fold stratified cross-validation")
 
 # Bin y into K_FOLDS quantiles for stratified splitting (regression proxy)
@@ -105,6 +106,29 @@ def make_inv_y(scaler):
         log_vals = scaler.inverse_transform(a.reshape(-1, 1)).ravel()
         return 10 ** log_vals
     return inv
+
+
+def compute_sample_weights(y_train_orig):
+    """Return per-sample training weights that emphasise high target values.
+
+    Returns None when SAMPLE_WEIGHT_SCHEME == 'none'.
+    Otherwise returns an array of positive weights normalised to mean = 1,
+    which preserves average gradient magnitude so learning dynamics are not
+    thrown off relative to the unweighted baseline.
+
+    'rank'       — weight proportional to rank (1 = lowest, n = highest);
+                   robust to outliers in the y scale.
+    'log_value'  — weight proportional to log10(y) shifted to be strictly
+                   positive; tied directly to the log10 preprocessing space.
+    """
+    if SAMPLE_WEIGHT_SCHEME == 'none':
+        return None
+    if SAMPLE_WEIGHT_SCHEME == 'rank':
+        w = np.argsort(np.argsort(y_train_orig)).astype(float) + 1.0
+    elif SAMPLE_WEIGHT_SCHEME == 'log_value':
+        lv = np.log10(y_train_orig)
+        w  = lv - lv.min() + 1.0
+    return w / w.mean()
 
 
 def alpha_grid_search(X_tr_s, y_tr_s, y_tr, inv_y, n_neurons,
@@ -284,6 +308,83 @@ plt.tight_layout()
 
 
 # =============================================================================
+# 1c. DISTRIBUTION DIAGNOSTICS — Gumbel vs Log-Normal
+# =============================================================================
+# These plots let you visually confirm which distribution better describes the
+# target variable, so you can choose PREPROCESS_TARGET in config.py accordingly.
+#
+# Gumbel probability paper: if points follow a straight line, the target is
+#   well-described by a Gumbel distribution.
+# Log-normal probability paper: if log10(target) plots linearly against normal
+#   quantiles, the target is well-described by a log-normal distribution.
+# PDF overlay + KS test give a quantitative comparison.
+
+print("\n" + "=" * 60)
+print("DISTRIBUTION DIAGNOSTICS — Gumbel vs Log-Normal")
+print("=" * 60)
+
+_gfit_loc, _gfit_scale   = gumbel_r.fit(y_orig)
+_ln_shape, _ln_loc, _ln_scale = lognorm.fit(y_orig, floc=0)
+
+_ks_g  = kstest(y_orig, 'gumbel_r', args=(_gfit_loc, _gfit_scale))
+_ks_ln = kstest(y_orig, 'lognorm',  args=(_ln_shape, _ln_loc, _ln_scale))
+print(f"  KS test — Gumbel:     D={_ks_g.statistic:.4f}   p={_ks_g.pvalue:.4f}")
+print(f"  KS test — Log-Normal: D={_ks_ln.statistic:.4f}   p={_ks_ln.pvalue:.4f}")
+print(f"  Better fit (lower KS D): {'Gumbel' if _ks_g.statistic < _ks_ln.statistic else 'Log-Normal'}")
+
+fig_dist_diag, _axd = plt.subplots(1, 3, figsize=(15, 5))
+
+# ── Panel 1: PDF overlay ──────────────────────────────────────────────────────
+_ax = _axd[0]
+_yr = np.linspace(y_orig.min() * 0.9, y_orig.max() * 1.1, 300)
+_ax.hist(y_orig, bins=15, density=True, alpha=0.4,
+         color='steelblue', edgecolor='white', label='Data')
+_ax.plot(_yr, gumbel_r.pdf(_yr, loc=_gfit_loc, scale=_gfit_scale),
+         'r-', lw=2, label=f'Gumbel  (KS D={_ks_g.statistic:.3f})')
+_ax.plot(_yr, lognorm.pdf(_yr, _ln_shape, _ln_loc, _ln_scale),
+         'g-', lw=2, label=f'Log-Normal  (KS D={_ks_ln.statistic:.3f})')
+_ax.set_xlabel('Target (original units)')
+_ax.set_ylabel('Density')
+_ax.set_title('PDF Overlay — Target Variable')
+_ax.legend(fontsize=8); _ax.grid(True, alpha=0.3)
+
+# ── Panel 2: Gumbel probability paper ────────────────────────────────────────
+# Points lie on a straight line when data follows a Gumbel distribution.
+_ax = _axd[1]
+_n   = len(y_orig)
+_sy  = np.sort(y_orig)
+_p_g = (np.arange(1, _n + 1) - 0.44) / (_n + 0.12)   # Gringorten plotting positions
+_rv  = -np.log(-np.log(_p_g))                          # Gumbel reduced variate
+_ax.scatter(_rv, _sy, alpha=0.6, s=18, color='steelblue',
+            edgecolors='k', linewidths=0.3, label='Data')
+_zl = np.linspace(_rv.min() - 0.5, _rv.max() + 0.5, 100)
+_ax.plot(_zl, _gfit_loc + _gfit_scale * _zl, 'r-', lw=2,
+         label=f'Gumbel line  (KS D={_ks_g.statistic:.3f})')
+_ax.set_xlabel('Gumbel Reduced Variate  −ln(−ln(p))')
+_ax.set_ylabel('Target (original units)')
+_ax.set_title('Gumbel Probability Paper')
+_ax.legend(fontsize=8); _ax.grid(True, alpha=0.3)
+
+# ── Panel 3: Log-normal probability paper ────────────────────────────────────
+# Points lie on a straight line when log10(data) is normally distributed.
+_ax = _axd[2]
+(_osm, _osr), (_sl, _ic, _r) = probplot(np.log10(y_orig), dist='norm', fit=True)
+_ax.scatter(_osm, _osr, alpha=0.6, s=18, color='steelblue',
+            edgecolors='k', linewidths=0.3, label='log\u2081\u2080(data)')
+_ax.plot(_osm, _sl * np.array(_osm) + _ic, 'g-', lw=2,
+         label=f'Normal fit  R\u00b2={_r**2:.4f}')
+_ax.set_xlabel('Theoretical Normal Quantiles')
+_ax.set_ylabel('log\u2081\u2080(Target)')
+_ax.set_title('Log-Normal Probability Paper')
+_ax.legend(fontsize=8); _ax.grid(True, alpha=0.3)
+
+fig_dist_diag.suptitle(
+    'Target Distribution Diagnostics  —  Preprocessing: log10',
+    fontsize=12)
+plt.tight_layout()
+
+
+# =============================================================================
 # 2. STRATIFIED K-FOLD CROSS-VALIDATION
 # =============================================================================
 
@@ -326,6 +427,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     X_test_s  = scaler_X.transform(X_test)
     y_train_s = scaler_y.fit_transform(y_train.reshape(-1, 1)).ravel()
     inv_y     = make_inv_y(scaler_y)
+    sw        = compute_sample_weights(y_orig_train)
 
     # Unique seed per fold to avoid seed collision across folds
     fold_seed = RANDOM_SEED + fold_idx * 1000
@@ -353,7 +455,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     best_alpha_base = alpha_grid_search(
         X_train_s, y_train_s, y_orig_train, inv_y, best_n, random_state=fold_seed)
     best_net = make_mlp(best_n, random_state=fold_seed, alpha=best_alpha_base)
-    best_net.fit(X_train_s, y_train_s)
+    best_net.fit(X_train_s, y_train_s, sample_weight=sw)
     base_pred = inv_y(best_net.predict(X_test_s))
     mse, r, r2 = compute_metrics(y_orig_test, base_pred)
     fold_metrics['Baseline']['mse'].append(mse)
@@ -385,7 +487,8 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
         oob_mask[np.unique(boot_idx)] = False
         net_b = make_mlp(best_n, random_state=fold_seed + m,
                          alpha=best_alpha_bag)
-        net_b.fit(X_train_s[boot_idx], y_train_s[boot_idx])
+        sw_boot = sw[boot_idx] if sw is not None else None
+        net_b.fit(X_train_s[boot_idx], y_train_s[boot_idx], sample_weight=sw_boot)
         if oob_mask.any():
             oob_sum_bag[oob_mask] += net_b.predict(X_train_s[oob_mask])
             oob_cnt_bag[oob_mask] += 1
@@ -418,7 +521,8 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
         oob_mask[sub_idx] = False
         net_s = make_mlp(best_n, random_state=fold_seed + m,
                          alpha=best_alpha_sub)
-        net_s.fit(X_train_s[sub_idx], y_train_s[sub_idx])
+        sw_sub = sw[sub_idx] if sw is not None else None
+        net_s.fit(X_train_s[sub_idx], y_train_s[sub_idx], sample_weight=sw_sub)
         if oob_mask.any():
             oob_sum_sub[oob_mask] += net_s.predict(X_train_s[oob_mask])
             oob_cnt_sub[oob_mask] += 1
@@ -444,7 +548,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     for m in range(N_ENSEMBLE):
         net_d = make_mlp(best_n, random_state=fold_seed * 100 + m,
                          alpha=best_alpha_de)
-        net_d.fit(X_train_s, y_train_s)
+        net_d.fit(X_train_s, y_train_s, sample_weight=sw)
         de_preds_test[m] = net_d.predict(X_test_s)
     de_preds_orig = np.array([inv_y(de_preds_test[m]) for m in range(N_ENSEMBLE)])
     de_pred_test  = de_preds_orig.mean(axis=0)
@@ -469,7 +573,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     for stage in range(N_BOOST_STAGES):
         net_r = make_mlp(best_n, random_state=fold_seed + stage * 37,
                          alpha=best_alpha_bst)
-        net_r.fit(X_train_s, residual)
+        net_r.fit(X_train_s, residual, sample_weight=sw)
         cumulative_train += net_r.predict(X_train_s)
         cumulative_test  += net_r.predict(X_test_s)
         residual          = y_train_s - cumulative_train
@@ -662,6 +766,7 @@ figures = {
     '00b_correlation_heatmap':             fig_corr,
     '00c_kmeans_clustering':               fig_clust,
     '00d_pca_cluster_projection':          fig_pca,
+    '00e_target_distribution_diagnostics': fig_dist_diag,
     '01_architecture_search_fold1':        fig_arch,
     '02_parameter_importance':              fig_imp,
     '03_baseline_oof_scatter':              fig_scatters['Baseline'],

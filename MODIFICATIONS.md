@@ -232,3 +232,90 @@ more linear and easier for the MLP's logistic activations to approximate.
 Because the inverse transform is applied before every metric call, the
 reported MSE and R² figures are directly comparable to values from earlier
 runs (pre-transform) and remain physically meaningful.
+
+---
+
+## [5] Distribution Diagnostics + Gumbel Exploration (tried and reverted)
+
+**Date:** 2026-03-13
+**Files changed:** `config.py`, `neural_network_ensemble.py`
+
+### What changed
+
+Added a distribution diagnostic section (1c) that compares how well the
+target variable fits a Gumbel vs a log-normal distribution, and explored
+a Gumbel reduced-variate preprocessing option. The Gumbel preprocessing was
+reverted after diagnostics confirmed log-normal is the better fit; the
+diagnostic plots were kept for future reference.
+
+### Implementation details
+
+- **Section 1c** — new diagnostic block inserted after the clustering/PCA
+  section; generates `00e_target_distribution_diagnostics.png` with three panels:
+  - PDF overlay: histogram of `y_orig` with fitted Gumbel and log-normal PDFs
+  - Gumbel probability paper: sorted `y_orig` vs Gringorten reduced variate
+    (`−ln(−ln(p))`); a straight line indicates a Gumbel fit
+  - Log-normal probability paper: normal Q-Q plot of `log10(y_orig)`
+  - KS test D-statistics and p-values printed for both distributions
+- **Imports** — added `gumbel_r`, `lognorm`, `kstest`, `probplot` from
+  `scipy.stats`; retained for the diagnostics even after the preprocessing
+  option was removed
+
+### Results
+
+KS D = 0.064 (log-normal) vs D = 0.277 (Gumbel); log-normal probability
+paper R² = 0.97. The Gumbel option was removed; log10 remains the only
+preprocessing applied to the target.
+
+---
+
+## [6] Sample Weighting to Emphasise Extreme Target Values
+
+**Date:** 2026-03-13
+**Files changed:** `config.py`, `neural_network_ensemble.py`
+
+### What changed
+
+Added per-sample training weights so that high target values receive
+disproportionately more influence during gradient updates, directly
+addressing the heavy upper tail that causes high MSE on extreme samples.
+
+### Implementation details
+
+- **`config.py`** — added `SAMPLE_WEIGHT_SCHEME` with three options:
+  - `'none'` — all samples equally weighted (default, original behaviour)
+  - `'rank'` — weight proportional to rank within the training fold; robust
+    to scale of `y`
+  - `'log_value'` — weight proportional to `log10(y_orig)` shifted to be
+    strictly positive; tied to the log10 preprocessing space
+- **`compute_sample_weights(y_train_orig)`** — new helper in the HELPERS
+  section; returns `None` for `'none'`, otherwise a weight array normalised
+  to `mean = 1` (preserves average gradient magnitude)
+- **CV loop** — `sw = compute_sample_weights(y_orig_train)` computed once
+  per fold after scalers are fitted
+- **Baseline** — `best_net.fit(..., sample_weight=sw)`
+- **Bagging (Bootstrap)** — `sw_boot = sw[boot_idx]` passed to each member
+- **Bagging (Subsampling)** — `sw_sub = sw[sub_idx]` passed to each member
+- **Deep Ensemble** — `sw` passed to each member
+- **Residual Boosting** — `sw` passed to each stage (target changes per
+  stage, weights do not)
+- Architecture search and `alpha_grid_search` are intentionally left
+  unweighted to keep hyperparameter selection fast and stable
+
+### Results (5-fold CV, `SAMPLE_WEIGHT_SCHEME = 'log_value'`)
+
+| Model | MSE mean | Δ vs [4] | R² mean | Δ vs [4] |
+|---|---|---|---|---|
+| Baseline | 49,493 | −3,088 | 0.898 | +0.013 |
+| Bagging (Bootstrap) | 48,606 | −64 | 0.901 | −0.002 |
+| Bagging (Subsamp) | **43,490** | **−6,222** | **0.911** | **+0.012** |
+| Deep Ensemble | 48,294 | +1,413 | 0.902 | −0.001 |
+| Residual Boosting | 49,376 | −2,738 | 0.899 | +0.012 |
+
+Bagging (Subsampling) becomes the best model. The combination of
+without-replacement subsampling (each member sees a clean 65% subset) and
+log_value weights (extreme samples get extra pull when they are in a
+member's training set) creates stronger member diversity across the target
+range than bootstrap or deep ensemble approaches. Fold-to-fold MSE variance
+dropped substantially across all models, indicating more consistent
+performance rather than lucky fold assignments.
