@@ -63,6 +63,7 @@ y = M[:, -1]    # last column              (samples,)
 # y_orig retains the untransformed target so that metrics (MSE, R²) are always
 # reported in the original physical units after applying the inverse transform.
 y_orig  = y.copy()
+X_raw   = X.copy()           # raw features before log10 — used for distribution plots
 X[:, 0] = np.log10(X[:, 0])
 y       = np.log10(y)
 
@@ -183,6 +184,29 @@ def scatter_plot(y_true, y_pred, title):
 print("\n" + "=" * 60)
 print("INPUT DATA EXPLORATION")
 print("=" * 60)
+
+# ── Raw feature & target distributions (before log10) — 2×2 grid ─────────────
+_param_labels = [f'Param {i + 1}' for i in range(n_features)] + ['Target']
+_raw_data     = [X_raw[:, i] for i in range(n_features)] + [y_orig]
+_raw_colors   = ['steelblue'] * n_features + ['tomato']
+
+fig_raw_dist, _axr = plt.subplots(2, 2, figsize=(9, 7))
+_axr = _axr.ravel()
+for _i, (_vals, _lbl, _col) in enumerate(zip(_raw_data, _param_labels, _raw_colors)):
+    _ax = _axr[_i]
+    _ax.hist(_vals, bins=15, density=True, alpha=0.5,
+             color=_col, edgecolor='white')
+    _kde_x = np.linspace(_vals.min(), _vals.max(), 200)
+    _ax.plot(_kde_x, gaussian_kde(_vals)(_kde_x), 'k-', lw=1.5)
+    _ax.set_title(_lbl, fontsize=9)
+    _ax.set_xlabel('Value (original units)', fontsize=7)
+    _ax.set_ylabel('Density', fontsize=7)
+    _ax.tick_params(labelsize=7)
+    _ax.grid(True, alpha=0.3)
+for _j in range(len(_raw_data), 4):
+    _axr[_j].set_visible(False)
+fig_raw_dist.suptitle('Raw Distributions — Before Preprocessing', fontsize=12)
+plt.tight_layout()
 
 # ── Feature & target distributions ───────────────────────────────────────────
 n_cols_d = min(4, n_features + 1)
@@ -332,20 +356,34 @@ print(f"  KS test — Gumbel:     D={_ks_g.statistic:.4f}   p={_ks_g.pvalue:.4f}
 print(f"  KS test — Log-Normal: D={_ks_ln.statistic:.4f}   p={_ks_ln.pvalue:.4f}")
 print(f"  Better fit (lower KS D): {'Gumbel' if _ks_g.statistic < _ks_ln.statistic else 'Log-Normal'}")
 
+# ── PDF overlay — isolated figure ────────────────────────────────────────────
+fig_pdf, _ax_pdf = plt.subplots(figsize=(5, 4))
+_yr = np.linspace(y_orig.min() * 0.9, y_orig.max() * 1.1, 300)
+_ax_pdf.hist(y_orig, bins=15, density=True, alpha=0.4,
+             color='steelblue', edgecolor='white', label='Data')
+_ax_pdf.plot(_yr, gumbel_r.pdf(_yr, loc=_gfit_loc, scale=_gfit_scale),
+             'r-', lw=2, label=f'Gumbel  (KS D={_ks_g.statistic:.3f})')
+_ax_pdf.plot(_yr, lognorm.pdf(_yr, _ln_shape, _ln_loc, _ln_scale),
+             'g-', lw=2, label=f'Log-Normal  (KS D={_ks_ln.statistic:.3f})')
+_ax_pdf.set_xlabel('Target (original units)')
+_ax_pdf.set_ylabel('Density')
+_ax_pdf.set_title('PDF Overlay — Target Variable')
+_ax_pdf.legend(fontsize=8); _ax_pdf.grid(True, alpha=0.3)
+plt.tight_layout()
+
 fig_dist_diag, _axd = plt.subplots(1, 3, figsize=(15, 5))
 
-# ── Panel 1: PDF overlay ──────────────────────────────────────────────────────
+# ── Panel 1: Normalization-only Q-Q (no log transform) ───────────────────────
+# Shows that StandardScaler alone does not produce a normal distribution.
 _ax = _axd[0]
-_yr = np.linspace(y_orig.min() * 0.9, y_orig.max() * 1.1, 300)
-_ax.hist(y_orig, bins=15, density=True, alpha=0.4,
-         color='steelblue', edgecolor='white', label='Data')
-_ax.plot(_yr, gumbel_r.pdf(_yr, loc=_gfit_loc, scale=_gfit_scale),
-         'r-', lw=2, label=f'Gumbel  (KS D={_ks_g.statistic:.3f})')
-_ax.plot(_yr, lognorm.pdf(_yr, _ln_shape, _ln_loc, _ln_scale),
-         'g-', lw=2, label=f'Log-Normal  (KS D={_ks_ln.statistic:.3f})')
-_ax.set_xlabel('Target (original units)')
-_ax.set_ylabel('Density')
-_ax.set_title('PDF Overlay — Target Variable')
+(_osm_raw, _osr_raw), (_sl_raw, _ic_raw, _r_raw) = probplot(y_orig, dist='norm', fit=True)
+_ax.scatter(_osm_raw, _osr_raw, alpha=0.6, s=18, color='steelblue',
+            edgecolors='k', linewidths=0.3, label='Data (no log)')
+_ax.plot(_osm_raw, _sl_raw * np.array(_osm_raw) + _ic_raw, 'r-', lw=2,
+         label=f'Normal fit  R\u00b2={_r_raw**2:.4f}')
+_ax.set_xlabel('Theoretical Normal Quantiles')
+_ax.set_ylabel('Target (original units)')
+_ax.set_title('Q-Q — Normalisation Only')
 _ax.legend(fontsize=8); _ax.grid(True, alpha=0.3)
 
 # ── Panel 2: Gumbel probability paper ────────────────────────────────────────
@@ -762,11 +800,13 @@ plt.tight_layout()
 # =============================================================================
 
 figures = {
-    '00_input_distributions':              fig_dist,
+    '00_raw_distributions':                fig_raw_dist,
+    '00a_input_distributions':             fig_dist,
     '00b_correlation_heatmap':             fig_corr,
     '00c_kmeans_clustering':               fig_clust,
     '00d_pca_cluster_projection':          fig_pca,
     '00e_target_distribution_diagnostics': fig_dist_diag,
+    '00f_pdf_overlay':                     fig_pdf,
     '01_architecture_search_fold1':        fig_arch,
     '02_parameter_importance':              fig_imp,
     '03_baseline_oof_scatter':              fig_scatters['Baseline'],
