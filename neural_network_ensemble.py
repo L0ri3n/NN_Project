@@ -421,6 +421,61 @@ fig_dist_diag.suptitle(
     fontsize=12)
 plt.tight_layout()
 
+# ── K_h (Param 1) distribution diagnostics ───────────────────────────────────
+_kh = X_raw[:, 0]
+_kh_gfit_loc, _kh_gfit_scale     = gumbel_r.fit(_kh)
+_kh_ln_shape, _kh_ln_loc, _kh_ln_scale = lognorm.fit(_kh, floc=0)
+_kh_ks_g  = kstest(_kh, 'gumbel_r', args=(_kh_gfit_loc, _kh_gfit_scale))
+_kh_ks_ln = kstest(_kh, 'lognorm',  args=(_kh_ln_shape, _kh_ln_loc, _kh_ln_scale))
+print(f"\nDISTRIBUTION DIAGNOSTICS — K_h (Param 1)")
+print(f"  KS test — Gumbel:     D={_kh_ks_g.statistic:.4f}   p={_kh_ks_g.pvalue:.4f}")
+print(f"  KS test — Log-Normal: D={_kh_ks_ln.statistic:.4f}   p={_kh_ks_ln.pvalue:.4f}")
+print(f"  Better fit (lower KS D): {'Gumbel' if _kh_ks_g.statistic < _kh_ks_ln.statistic else 'Log-Normal'}")
+
+fig_kh_diag, _axk = plt.subplots(1, 3, figsize=(15, 5))
+
+_ax = _axk[0]
+(_osm_kh, _osr_kh), (_sl_kh, _ic_kh, _r_kh) = probplot(_kh, dist='norm', fit=True)
+_ax.scatter(_osm_kh, _osr_kh, alpha=0.6, s=18, color='steelblue',
+            edgecolors='k', linewidths=0.3, label='Data (no log)')
+_ax.plot(_osm_kh, _sl_kh * np.array(_osm_kh) + _ic_kh, 'r-', lw=2,
+         label=f'Normal fit  R\u00b2={_r_kh**2:.4f}')
+_ax.set_xlabel('Theoretical Normal Quantiles')
+_ax.set_ylabel('$K_h$ (m$^2$, original units)')
+_ax.set_title('Q-Q — Normalisation Only')
+_ax.legend(fontsize=8); _ax.grid(True, alpha=0.3)
+
+_ax = _axk[1]
+_n_kh  = len(_kh)
+_sy_kh = np.sort(_kh)
+_p_kh  = (np.arange(1, _n_kh + 1) - 0.44) / (_n_kh + 0.12)
+_rv_kh = -np.log(-np.log(_p_kh))
+_ax.scatter(_rv_kh, _sy_kh, alpha=0.6, s=18, color='steelblue',
+            edgecolors='k', linewidths=0.3, label='Data')
+_zl_kh = np.linspace(_rv_kh.min() - 0.5, _rv_kh.max() + 0.5, 100)
+_ax.plot(_zl_kh, _kh_gfit_loc + _kh_gfit_scale * _zl_kh, 'r-', lw=2,
+         label=f'Gumbel line  (KS D={_kh_ks_g.statistic:.3f})')
+_ax.set_xlabel('Gumbel Reduced Variate  −ln(−ln(p))')
+_ax.set_ylabel('$K_h$ (m$^2$, original units)')
+_ax.set_title('Gumbel Probability Paper')
+_ax.legend(fontsize=8); _ax.grid(True, alpha=0.3)
+
+_ax = _axk[2]
+(_osm_khl, _osr_khl), (_sl_khl, _ic_khl, _r_khl) = probplot(np.log10(_kh), dist='norm', fit=True)
+_ax.scatter(_osm_khl, _osr_khl, alpha=0.6, s=18, color='steelblue',
+            edgecolors='k', linewidths=0.3, label='log\u2081\u2080($K_h$)')
+_ax.plot(_osm_khl, _sl_khl * np.array(_osm_khl) + _ic_khl, 'g-', lw=2,
+         label=f'Normal fit  R\u00b2={_r_khl**2:.4f}')
+_ax.set_xlabel('Theoretical Normal Quantiles')
+_ax.set_ylabel('log\u2081\u2080($K_h$)')
+_ax.set_title('Log-Normal Probability Paper')
+_ax.legend(fontsize=8); _ax.grid(True, alpha=0.3)
+
+fig_kh_diag.suptitle(
+    '$K_h$ Distribution Diagnostics  —  Preprocessing: log10',
+    fontsize=12)
+plt.tight_layout()
+
 
 # =============================================================================
 # 2. STRATIFIED K-FOLD CROSS-VALIDATION
@@ -510,6 +565,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
             'y_train_s': y_train_s,    'y_train':   y_orig_train,  # original units
             'y_test':    y_orig_test,  'inv_y':     inv_y,         # original units
             'best_n':    best_n,       'fold_seed': fold_seed,
+            'train_idx': train_idx,    'test_idx':  test_idx,
         }
 
     # ── Bagging — Bootstrap (with replacement) ────────────────────────────────
@@ -543,6 +599,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     fold_metrics['Bagging']['r2'].append(r2)
     oof_preds['Bagging'][test_idx] = bag_pred_test
     print(f"  Bagging (Boot)   MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}"
+          f"  (alpha={best_alpha_bag})"
           f"  OOB-MSE={oob_mse_bag:.6f}  OOB-cov={valid_oob_bag.mean():.0%}")
 
     # ── Bagging — Subsampling (without replacement, BAG_SUBSAMPLE_FRAC) ───────
@@ -577,6 +634,7 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     fold_metrics['Bagging (Subsamp)']['r2'].append(r2)
     oof_preds['Bagging (Subsamp)'][test_idx] = sub_pred_test
     print(f"  Bag. (Subsamp)   MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}"
+          f"  (alpha={best_alpha_sub})"
           f"  OOB-MSE={oob_mse_sub:.6f}  OOB-cov={valid_oob_sub.mean():.0%}")
 
     # ── Deep Ensembles ────────────────────────────────────────────────────────
@@ -596,7 +654,8 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     fold_metrics['Deep Ensemble']['r'].append(r)
     fold_metrics['Deep Ensemble']['r2'].append(r2)
     oof_preds['Deep Ensemble'][test_idx] = de_pred_test
-    print(f"  Deep Ensemble    MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}")
+    print(f"  Deep Ensemble    MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}"
+          f"  (alpha={best_alpha_de})")
 
     if fold_idx == 0:
         fold1_data['de_pred_test'] = de_pred_test
@@ -621,7 +680,8 @@ for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y_bins)):
     fold_metrics['Residual Boosting']['r'].append(r)
     fold_metrics['Residual Boosting']['r2'].append(r2)
     oof_preds['Residual Boosting'][test_idx] = bst_pred_test
-    print(f"  Res. Boosting    MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}")
+    print(f"  Res. Boosting    MSE={mse:.6f}  R={r:.4f}  R²={r2:.4f}"
+          f"  (alpha={best_alpha_bst})")
 
     oof_true[test_idx] = y_orig_test   # original units for OOF scatter plots
 
@@ -658,16 +718,59 @@ sorted_idx    = np.argsort(norm_impact)[::-1]
 sorted_labels = [f'Param {i + 1}' for i in sorted_idx]
 sorted_values = norm_impact[sorted_idx]
 
-fig_imp, ax = plt.subplots(figsize=(max(6, n_features), 4))
-bars = ax.bar(range(n_features), sorted_values, color='steelblue')
-ax.set_xticks(range(n_features))
-ax.set_xticklabels(sorted_labels, rotation=45, ha='right')
-ax.set_xlabel('Parameters'); ax.set_ylabel('Normalized Mean Performance Impact')
-ax.set_title('Parameter Importance (Leave-One-Out, Fold 1)')
-ax.grid(True, axis='y')
-for bar, val in zip(bars, sorted_values):
-    ax.text(bar.get_x() + bar.get_width() / 2, val,
-            f'{val:.2f}', ha='center', va='bottom', fontsize=8)
+# ── Raw-input LOO importance (standardisation only, no log10 on any input) ───
+print("\nPARAMETER IMPORTANCE — Leave-One-Out (raw inputs, fold-1 split)")
+tr_idx1 = fold1_data['train_idx']
+te_idx1 = fold1_data['test_idx']
+
+X_raw_tr = X_raw[tr_idx1]
+X_raw_te = X_raw[te_idx1]
+scaler_x_raw = StandardScaler().fit(X_raw_tr)
+X_raw_tr_s   = scaler_x_raw.transform(X_raw_tr)
+X_raw_te_s   = scaler_x_raw.transform(X_raw_te)
+
+# Target: y_orig scaled independently (no log10)
+scaler_y_raw  = StandardScaler().fit(y_tr1.reshape(-1, 1))
+y_raw_tr_s    = scaler_y_raw.transform(y_tr1.reshape(-1, 1)).ravel()
+inv_y_raw     = lambda a: scaler_y_raw.inverse_transform(
+                    np.array(a).reshape(-1, 1)).ravel()
+
+impact_raw = np.zeros(n_features)
+for p in range(n_features):
+    cols       = [c for c in range(n_features) if c != p]
+    net_raw    = make_mlp(bn1, random_state=fs1)
+    net_raw.fit(X_raw_tr_s[:, cols], y_raw_tr_s)
+    mse_tr_raw = mean_squared_error(y_tr1, inv_y_raw(net_raw.predict(X_raw_tr_s[:, cols])))
+    mse_te_raw = mean_squared_error(y_te1, inv_y_raw(net_raw.predict(X_raw_te_s[:, cols])))
+    impact_raw[p] = (mse_tr_raw + mse_te_raw) / 2
+    print(f"  Excl. Param {p + 1:2d}  TrainMSE={mse_tr_raw:.6f}  TestMSE={mse_te_raw:.6f}")
+
+norm_impact_raw   = impact_raw / impact_raw.sum()
+sorted_idx_raw    = np.argsort(norm_impact_raw)[::-1]
+sorted_labels_raw = [f'Param {i + 1}' for i in sorted_idx_raw]
+sorted_values_raw = norm_impact_raw[sorted_idx_raw]
+
+# ── Side-by-side comparison figure ───────────────────────────────────────────
+fig_imp, axes = plt.subplots(1, 2, figsize=(max(10, n_features * 2), 4),
+                             sharey=False)
+
+for ax_, vals, labels, title in zip(
+        axes,
+        [sorted_values,     sorted_values_raw],
+        [sorted_labels,     sorted_labels_raw],
+        ['Log-transformed inputs', 'Raw inputs (standardisation only)']):
+    bars_ = ax_.bar(range(n_features), vals, color='steelblue')
+    ax_.set_xticks(range(n_features))
+    ax_.set_xticklabels(labels, rotation=45, ha='right')
+    ax_.set_xlabel('Parameters')
+    ax_.set_ylabel('Normalised Mean Performance Impact')
+    ax_.set_title(title)
+    ax_.grid(True, axis='y')
+    for bar_, val_ in zip(bars_, vals):
+        ax_.text(bar_.get_x() + bar_.get_width() / 2, val_,
+                 f'{val_:.2f}', ha='center', va='bottom', fontsize=8)
+
+fig_imp.suptitle('Parameter Importance — Leave-One-Out (Fold 1)', fontsize=12)
 plt.tight_layout()
 
 
@@ -806,6 +909,7 @@ figures = {
     '00c_kmeans_clustering':               fig_clust,
     '00d_pca_cluster_projection':          fig_pca,
     '00e_target_distribution_diagnostics': fig_dist_diag,
+    '00e2_kh_distribution_diagnostics':   fig_kh_diag,
     '00f_pdf_overlay':                     fig_pdf,
     '01_architecture_search_fold1':        fig_arch,
     '02_parameter_importance':              fig_imp,
