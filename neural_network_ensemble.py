@@ -750,27 +750,20 @@ sorted_idx_raw    = np.argsort(norm_impact_raw)[::-1]
 sorted_labels_raw = [f'Param {i + 1}' for i in sorted_idx_raw]
 sorted_values_raw = norm_impact_raw[sorted_idx_raw]
 
-# ── Side-by-side comparison figure ───────────────────────────────────────────
-fig_imp, axes = plt.subplots(1, 2, figsize=(max(10, n_features * 2), 4),
-                             sharey=False)
+print("\nRaw-input importance (for comparison — not plotted):")
+for i, (lbl, val) in enumerate(zip(sorted_labels_raw, sorted_values_raw)):
+    print(f"  {lbl}: {val:.3f}")
 
-for ax_, vals, labels, title in zip(
-        axes,
-        [sorted_values,     sorted_values_raw],
-        [sorted_labels,     sorted_labels_raw],
-        ['Log-transformed inputs', 'Raw inputs (standardisation only)']):
-    bars_ = ax_.bar(range(n_features), vals, color='steelblue')
-    ax_.set_xticks(range(n_features))
-    ax_.set_xticklabels(labels, rotation=45, ha='right')
-    ax_.set_xlabel('Parameters')
-    ax_.set_ylabel('Normalised Mean Performance Impact')
-    ax_.set_title(title)
-    ax_.grid(True, axis='y')
-    for bar_, val_ in zip(bars_, vals):
-        ax_.text(bar_.get_x() + bar_.get_width() / 2, val_,
-                 f'{val_:.2f}', ha='center', va='bottom', fontsize=8)
-
-fig_imp.suptitle('Parameter Importance — Leave-One-Out (Fold 1)', fontsize=12)
+fig_imp, ax = plt.subplots(figsize=(max(6, n_features), 4))
+bars = ax.bar(range(n_features), sorted_values, color='steelblue')
+ax.set_xticks(range(n_features))
+ax.set_xticklabels(sorted_labels, rotation=45, ha='right')
+ax.set_xlabel('Parameters'); ax.set_ylabel('Normalized Mean Performance Impact')
+ax.set_title('Parameter Importance (Leave-One-Out, Fold 1)')
+ax.grid(True, axis='y')
+for bar, val in zip(bars, sorted_values):
+    ax.text(bar.get_x() + bar.get_width() / 2, val,
+            f'{val:.2f}', ha='center', va='bottom', fontsize=8)
 plt.tight_layout()
 
 
