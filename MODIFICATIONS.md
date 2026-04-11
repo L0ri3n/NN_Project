@@ -319,3 +319,100 @@ member's training set) creates stronger member diversity across the target
 range than bootstrap or deep ensemble approaches. Fold-to-fold MSE variance
 dropped substantially across all models, indicating more consistent
 performance rather than lucky fold assignments.
+
+---
+
+## [7] K_h Distribution Diagnostics + Standard-Normalisation Baseline
+
+**Date:** 2026-04-11
+**Files changed:** `neural_network_ensemble.py`
+
+### What changed
+
+Two additions made to support the LaTeX report:
+
+1. **K_h distribution diagnostic figure (section 1c, `fig_kh_diag`)** — mirrors
+   the existing target distribution diagnostics but applied to Param 1 (aquifer
+   permeability $K_h$). Three-panel figure: standard Q-Q plot against normal
+   quantiles, Gumbel probability paper, and log-normal probability paper. KS test
+   D-statistics printed to console. Saved as `00e2_kh_distribution_diagnostics.png`.
+
+2. **Standard-normalisation baseline CV (section 1d)** — reruns the full
+   stratified 5-fold CV for all five models using only `StandardScaler` on raw
+   inputs and raw target (no log10 transform, no sample weights). Results are
+   printed to console and used in the preprocessing comparison table in the report.
+   This provides the "standard normalisation only" baseline row against which the
+   full log10 + sample weight pipeline is compared.
+
+### Implementation details
+
+- `X_raw` preserved before log10 transforms for use in section 1d and the raw
+  LOO importance check
+- `fig_kh_diag` added to the `figures` dict under key `'00e2_kh_distribution_diagnostics'`
+- Section 1d uses private-scope variables (prefixed `_`) to avoid contaminating
+  the main CV namespace; architecture search is simplified (no alpha grid search)
+  to keep the comparison run fast
+
+### Results
+
+K_h KS statistics: D = 0.243 (log-normal) vs D = 0.297 (Gumbel). Log-normal
+remains the better fit, though the higher D compared to the target reflects the
+near-uniform spacing of the ten K_h levels on the log scale.
+
+Standard-normalisation baseline MSE (mean ± std across 5 folds):
+
+| Model              | MSE mean   | MSE std    |
+|--------------------|------------|------------|
+| Baseline           | ~121,786   | ~118,119   |
+| Bagging (Bootstrap)| ~120,724   | ~15,403    |
+| Bagging (Subsamp)  | ~115,483   | ~17,196    |
+| Deep Ensemble      | ~56,587    | ~18,009    |
+| Residual Boosting  | ~120,621   | ~118,112   |
+
+Bootstrap Bagging and Residual Boosting show fold std approaching the mean,
+illustrating that the log10 + sample weight pipeline is a prerequisite for
+stable operation of those methods.
+
+### Motivation
+
+The report's preprocessing comparison table requires a true "no-preprocessing"
+baseline. Comparing log-only vs log+weights (as done in earlier development)
+does not answer the question of how much preprocessing helps overall. The
+standard-normalisation run provides that reference point.
+
+---
+
+## [8] Raw-Input Leave-One-Out Parameter Importance
+
+**Date:** 2026-04-11
+**Files changed:** `neural_network_ensemble.py`
+
+### What changed
+
+Added a second LOO parameter importance analysis that uses untransformed inputs
+(raw `X_raw`, `StandardScaler` only, no log10) to verify that the importance
+ranking produced by the main analysis is not an artefact of the log10 transform
+applied to K_h.
+
+### Implementation details
+
+- Uses the fold-1 train/test split stored in `fold1_data['train_idx']` and
+  `fold1_data['test_idx']` (added to `fold1_data` alongside this change)
+- A fresh `StandardScaler` is fitted on `X_raw[train_idx]` for this analysis
+- Architecture fixed to `fold1_data['best_n']`; alpha fixed to sklearn default
+- Results printed to console only — no figure generated
+- `fold1_data` extended with `'train_idx'` and `'test_idx'` keys
+
+### Results
+
+Raw-input importance (normalised): φ ≈ 0.57, L ≈ 0.26, K_h ≈ 0.17 — identical
+ranking to the log-space analysis. K_h's lower importance is not a preprocessing
+artefact; it genuinely has less influence on contaminant concentration than
+porosity or source distance across the sampled parameter range.
+
+### Motivation
+
+K_h (aquifer permeability) is log10-transformed during preprocessing. There was
+a concern that this transform might disproportionately compress the K_h signal
+relative to the other two inputs, artificially suppressing its apparent importance.
+The raw-input check rules this out.

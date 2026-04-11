@@ -478,6 +478,111 @@ plt.tight_layout()
 
 
 # =============================================================================
+# 1d. STANDARD-NORMALISATION BASELINE (no log10, for comparison table)
+# =============================================================================
+# Runs the same stratified 5-fold CV using only StandardScaler on raw inputs
+# and raw target — no log10 transform anywhere. Results are printed for use
+# in the preprocessing comparison table (Table 4 in the report).
+
+print("\n" + "=" * 60)
+print("STANDARD-NORMALISATION BASELINE (no log10)")
+print("=" * 60)
+
+_skf_base = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=RANDOM_SEED)
+_base_metrics = {name: {'mse': [], 'r2': []} for name in
+                 ['Baseline', 'Bagging', 'Bagging (Subsamp)',
+                  'Deep Ensemble', 'Residual Boosting']}
+
+for _fi, (_tr, _te) in enumerate(_skf_base.split(X_raw, y_bins)):
+    _fold_seed = RANDOM_SEED + _fi * 1000
+    _Xr_tr, _Xr_te = X_raw[_tr], X_raw[_te]
+    _yr_tr, _yr_te = y_orig[_tr], y_orig[_te]
+
+    _sx = StandardScaler().fit(_Xr_tr)
+    _sy = StandardScaler().fit(_yr_tr.reshape(-1, 1))
+    _Xs_tr = _sx.transform(_Xr_tr)
+    _Xs_te = _sx.transform(_Xr_te)
+    _ys_tr = _sy.transform(_yr_tr.reshape(-1, 1)).ravel()
+    _inv   = lambda a, _sy=_sy: _sy.inverse_transform(
+                 np.array(a).reshape(-1, 1)).ravel()
+
+    # Architecture search (same range, no alpha grid to keep it fast)
+    _best_n_b, _best_mse_b = 1, np.inf
+    for _n in range(1, 31):
+        _split = int(0.8 * len(_ys_tr))
+        _net = make_mlp(_n, random_state=_fold_seed)
+        _net.fit(_Xs_tr[:_split], _ys_tr[:_split])
+        _vm = mean_squared_error(_yr_tr[_split:],
+                                 _inv(_net.predict(_Xs_te[:len(_yr_tr[_split:])]
+                                      if False else _Xs_tr[_split:])))
+        if _vm < _best_mse_b:
+            _best_mse_b, _best_n_b = _vm, _n
+
+    def _cv_mse(pred, true=_yr_te):
+        return mean_squared_error(true, _inv(pred))
+
+    # Baseline
+    _net = make_mlp(_best_n_b, random_state=_fold_seed)
+    _net.fit(_Xs_tr, _ys_tr)
+    _p = _net.predict(_Xs_te)
+    _base_metrics['Baseline']['mse'].append(_cv_mse(_p))
+    _base_metrics['Baseline']['r2'].append(
+        r2_score(_yr_te, _inv(_p)))
+
+    # Bagging (Bootstrap)
+    _bag_p = np.zeros(len(_yr_te))
+    for _m in range(N_ENSEMBLE):
+        _bi = resample(np.arange(len(_yr_tr)), replace=True,
+                       random_state=_fold_seed + _m)
+        _nb = make_mlp(_best_n_b, random_state=_fold_seed + _m)
+        _nb.fit(_Xs_tr[_bi], _ys_tr[_bi])
+        _bag_p += _nb.predict(_Xs_te)
+    _bag_p /= N_ENSEMBLE
+    _base_metrics['Bagging']['mse'].append(_cv_mse(_bag_p))
+    _base_metrics['Bagging']['r2'].append(r2_score(_yr_te, _inv(_bag_p)))
+
+    # Bagging (Subsampling)
+    _sub_size = int(BAG_SUBSAMPLE_FRAC * len(_yr_tr))
+    _subs_p = np.zeros(len(_yr_te))
+    for _m in range(N_ENSEMBLE):
+        _si = np.random.RandomState(_fold_seed + _m).choice(
+            len(_yr_tr), _sub_size, replace=False)
+        _ns = make_mlp(_best_n_b, random_state=_fold_seed + _m)
+        _ns.fit(_Xs_tr[_si], _ys_tr[_si])
+        _subs_p += _ns.predict(_Xs_te)
+    _subs_p /= N_ENSEMBLE
+    _base_metrics['Bagging (Subsamp)']['mse'].append(_cv_mse(_subs_p))
+    _base_metrics['Bagging (Subsamp)']['r2'].append(
+        r2_score(_yr_te, _inv(_subs_p)))
+
+    # Deep Ensemble
+    _de_p = np.zeros(len(_yr_te))
+    for _m in range(N_ENSEMBLE):
+        _nd = make_mlp(_best_n_b, random_state=_fold_seed + _m * 7)
+        _nd.fit(_Xs_tr, _ys_tr)
+        _de_p += _nd.predict(_Xs_te)
+    _de_p /= N_ENSEMBLE
+    _base_metrics['Deep Ensemble']['mse'].append(_cv_mse(_de_p))
+    _base_metrics['Deep Ensemble']['r2'].append(r2_score(_yr_te, _inv(_de_p)))
+
+    # Residual Boosting
+    _boost_p = np.zeros(len(_yr_te))
+    _res = _ys_tr.copy()
+    for _stage in range(N_ENSEMBLE):
+        _nb2 = make_mlp(_best_n_b, random_state=_fold_seed + _stage)
+        _nb2.fit(_Xs_tr, _res)
+        _boost_p += _nb2.predict(_Xs_te)
+        _res = _res - _nb2.predict(_Xs_tr)
+    _base_metrics['Residual Boosting']['mse'].append(_cv_mse(_boost_p))
+    _base_metrics['Residual Boosting']['r2'].append(
+        r2_score(_yr_te, _inv(_boost_p)))
+
+print("\nStandard-normalisation baseline results (mean ± std):")
+for _name, _vals in _base_metrics.items():
+    print(f"  {_name:<22}  MSE={np.mean(_vals['mse']):.0f} ± {np.std(_vals['mse']):.0f}"
+          f"   R²={np.mean(_vals['r2']):.4f}")
+
+# =============================================================================
 # 2. STRATIFIED K-FOLD CROSS-VALIDATION
 # =============================================================================
 
